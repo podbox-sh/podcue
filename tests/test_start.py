@@ -1,0 +1,164 @@
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import types
+
+import pytest
+from conftest import make_wav, run
+
+from podcue import audio, pipeline, transcribe, weights
+from podcue.cli import execute
+from podcue.store import Episode, try_lock
+
+
+def expected_id(path):
+    return "ep_" + hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def dead_pid():
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def test_start_writes_the_folder_and_is_idempotent(engine, root, tmp_path, capsys):
+    wav = make_wav(tmp_path / "ep.wav")
+    first, code = run(capsys, "start", wav)
+    assert code == 0 and first["kind"] == "started" and first["created"] is True
+    view = first["episode"]
+    assert view["episodeId"] == expected_id(wav)
+    assert view["dir"] == str(root / "episodes" / view["episodeId"])
+    assert (view["source"], view["durationMs"], view["language"]) == (str(wav), 1_000, "en")
+    assert [(a["artifact"], a["state"], a["progress"]) for a in view["artifacts"]] == [
+        ("transcript", "ready", 100), ("cues", "ready", 100)]
+    assert [g["groupId"] for g in view["groups"]] == ["gc0001", "gc0002", "ungrouped"]
+    assert view["groups"][0] == {"groupId": "gc0001", "speakingMs": 36_000, "cueCount": 40,
+                                 "nearestGroupId": "gc0002", "nearestCosine": 0.6, "label": None}
+    assert view["labeledShare"] == 0.0 and view["summaries"] == []
+
+    folder = root / "episodes" / view["episodeId"]
+    assert {p.name for p in folder.iterdir()} == {
+        "episode.json", "transcript.vtt", "cues.json", "groups.json", "start.lock"}
+    assert (folder / "start.lock").read_text() == ""
+    assert "<v gc0001>line 1." in (folder / "transcript.vtt").read_text()
+
+    again, code = run(capsys, "start", wav, "--language", "de")
+    assert code == 0 and again["created"] is False
+    assert again["episode"]["episodeId"] == view["episodeId"] and again["episode"]["language"] == "en"
+    assert engine.calls == 1
+
+
+def test_root_flag_beats_podcue_home(engine, root, tmp_path, capsys):
+    other = tmp_path / "other"
+    result, _ = run(capsys, "start", make_wav(tmp_path / "ep.wav"), "--root", other)
+    assert result["episode"]["dir"].startswith(str(other.resolve()))
+    assert not root.exists()
+    view, _ = run(capsys, "--root", other, "episode", result["episode"]["episodeId"])
+    assert view["state"] == "present"
+
+
+def test_a_running_start_refuses_a_second_and_episode_reports_progress(engine, root, tmp_path, capsys):
+    wav = make_wav(tmp_path / "ep.wav")
+    seen = {}
+
+    def during():
+        seen["episode"] = execute(["episode", expected_id(wav)])[0]
+        seen["second"] = execute(["start", str(wav)])
+
+    engine.during = during
+    run(capsys, "start", wav)
+    assert seen["episode"]["artifacts"][0] == {"artifact": "transcript", "state": "running", "stage": "diarize", "progress": 0}
+    second, code = seen["second"]
+    assert code == 1 and second["kind"] == "error" and second["reason"] == "running"
+
+
+def test_a_held_lock_refuses_start_before_any_model_runs(engine, root, tmp_path, capsys):
+    wav = make_wav(tmp_path / "ep.wav")
+    folder = Episode(root, expected_id(wav)).dir
+    folder.mkdir(parents=True)
+    fd = try_lock(folder / "start.lock")
+    try:
+        result, code = run(capsys, "start", wav)
+    finally:
+        os.close(fd)
+    assert code == 1 and result["reason"] == "running"
+    assert "is running" in result["message"] and engine.calls == 0
+
+
+def test_a_lock_left_by_a_dead_process_is_stale_and_replaced(engine, root, tmp_path, capsys):
+    wav = make_wav(tmp_path / "ep.wav")
+    episode = Episode(root, expected_id(wav))
+    episode.dir.mkdir(parents=True)
+    pid = dead_pid()
+    episode.start_lock.write_text(f"{pid}\n")
+    episode.status.write_text(json.dumps({"pid": pid, "stage": "transcribe", "progress": 40}))
+    episode.manifest.write_text(json.dumps({"episodeId": episode.id, "source": str(wav), "durationMs": 1_000,
+                                            "language": "en", "createdAt": "2026-11-01T00:00:00Z"}))
+
+    view, _ = run(capsys, "episode", episode.id)
+    assert view["artifacts"][0] == {"artifact": "transcript", "state": "failed",
+                                    "message": "start was interrupted; run start again"}
+
+    result, code = run(capsys, "start", wav)
+    assert code == 0 and result["created"] is True
+    assert result["episode"]["createdAt"] == "2026-11-01T00:00:00Z"
+    assert not episode.status.exists() and episode.start_lock.read_text() == ""
+
+
+def test_a_failed_start_writes_failed_json_and_a_later_start_retries(engine, root, tmp_path, capsys):
+    wav = make_wav(tmp_path / "ep.wav")
+    engine.error = RuntimeError("model exploded")
+    result, code = run(capsys, "start", wav)
+    assert code == 1 and result == {"kind": "error", "message": "model exploded"}
+    episode = Episode(root, expected_id(wav))
+    failed = json.loads(episode.failed.read_text())
+    assert failed["message"] == "model exploded" and failed["stage"] == "diarize"
+    assert not episode.status.exists() and not episode.cues.exists()
+
+    view, _ = run(capsys, "episode", episode.id)
+    assert view["artifacts"][1] == {"artifact": "cues", "state": "failed", "message": "model exploded"}
+    assert "groups" not in view
+    cues, code = run(capsys, "cues", episode.id)
+    assert code == 0 and cues == {"state": "not-ready", "episodeId": episode.id, "on": "cues"}
+
+    engine.error = None
+    result, code = run(capsys, "start", wav)
+    assert code == 0 and result["created"] is True and not episode.failed.exists()
+
+
+def test_a_missing_file_is_rejected_before_any_model_or_download(monkeypatch, root, tmp_path, capsys):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("must not be called")
+
+    for module, name in ((transcribe, "open_transcriber"), (pipeline, "open_transcriber"), (weights, "ensure"),
+                         (audio, "to_wav"), (audio, "download"), (pipeline, "transcribe")):
+        monkeypatch.setattr(module, name, forbidden)
+    result, code = run(capsys, "start", tmp_path / "missing.mp3")
+    assert code == 1 and result["reason"] == "not-found"
+    result, code = run(capsys, "start", make_wav(tmp_path / "ep.wav"), "--language", "xx")
+    assert code == 1 and result["reason"] == "unknown-language"
+
+
+@pytest.mark.parametrize("preset, expected", [(None, "0"), ("1", "1")])
+def test_needle_telemetry_is_off_unless_the_user_set_it(monkeypatch, preset, expected):
+    if preset is None:
+        monkeypatch.delenv("NEEDLE_TELEMETRY", raising=False)
+    else:
+        monkeypatch.setenv("NEEDLE_TELEMETRY", preset)
+    monkeypatch.setitem(sys.modules, "needle", types.ModuleType("needle"))
+    transcribe.NeedleTranscriber("en")
+    assert os.environ["NEEDLE_TELEMETRY"] == expected
+
+
+def test_usage_errors_are_one_json_line(capsys):
+    result, code = run(capsys, "cues")
+    assert code == 1 and result["kind"] == "error" and "episodeId" in result["message"]
+    result, code = run(capsys, "nope")
+    assert code == 1 and result["kind"] == "error"
+
+
+def test_unknown_episode(root, capsys):
+    assert run(capsys, "episode", "ep_0000000000000000") == ({"state": "unknown", "episodeId": "ep_0000000000000000"}, 0)
+    assert run(capsys, "cues", "../../etc")[0]["state"] == "unknown"

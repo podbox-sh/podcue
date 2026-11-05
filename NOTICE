@@ -1,0 +1,36 @@
+podcue
+Copyright (c) 2026 Jianyu Zhao. MIT License, see LICENSE.
+
+Parts of podcue are ported from PodDrill (MIT, Copyright (c) 2026 Jianyu Zhao).
+
+Model weights and the speech-to-text packages are downloaded or installed
+separately. They are not part of this package and are not covered by its license.
+
+WeSpeaker ECAPA-TDNN512 (voxceleb_ECAPA512.onnx)
+  https://huggingface.co/Wespeaker/wespeaker-voxceleb-ecapa-tdnn512
+  Trained with WeSpeaker, https://github.com/wenet-e2e/wespeaker (code: Apache-2.0).
+  License: CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). The model card
+  has no license field; WeSpeaker states that pretrained models follow the license
+  of their training data, and VoxCeleb is CC BY 4.0.
+  Training data: VoxCeleb (Nagrani, Chung, Xie, Zisserman),
+  https://www.robots.ox.ac.uk/~vgg/data/voxceleb/
+
+pyannote segmentation-3.0 (segmentation.onnx)
+  pyannote segmentation-3.0 powerset model, ONNX export by onnx-community.
+  https://huggingface.co/onnx-community/pyannote-segmentation-3.0
+  License: MIT.
+
+cactus-needle 3.2.0 (speech-to-text for en de fr es it nl pl)
+  https://github.com/cactus-compute/needle
+  License: Apache-2.0 (per the installed package metadata),
+  https://www.apache.org/licenses/LICENSE-2.0
+  It downloads its Whistle weights from https://huggingface.co/Cactus-Compute/whistle
+  under the terms on that page. podcue turns its usage telemetry off
+  (NEEDLE_TELEMETRY=0) unless the user has set NEEDLE_TELEMETRY.
+
+Moonshine (ja, ko, zh only; optional `moonshine` extra)
+  Downloaded by the moonshine-voice package. The non-English Moonshine models are
+  released under the non-commercial Moonshine Community License:
+  https://www.moonshine.ai/license
+  Those terms apply only when podcue runs with --language ja, ko or zh. No other
+  language is routed to Moonshine.

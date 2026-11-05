@@ -1,0 +1,31 @@
+[project]
+name = "podcue"
+version = "0.1.0"
+description = "Turn podcast audio into timed, speaker-grouped cues an agent can read."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Jianyu Zhao" }]
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "cactus-needle==3.2.0",
+  "numpy==2.5.4",
+  "onnxruntime==1.31.0",
+  "platformdirs==4.14.5",
+  "pyyaml==6.0.3",
+]
+
+[project.optional-dependencies]
+moonshine = ["moonshine-voice==0.1.5"]
+
+[project.scripts]
+podcue = "podcue.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
