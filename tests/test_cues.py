@@ -1,6 +1,6 @@
 import pytest
 
-from podcue.cues import Cue, Word, build_cues, cue_document, render_vtt, shift, stamp
+from podcue.cues import Cue, Word, build_cues, cue_rows, group_table, render_vtt, shift, stamp
 from podcue.diarize import Tracks, Turn
 from podcue.regions import Slice
 
@@ -60,7 +60,7 @@ def test_zero_length_words_get_one_millisecond_and_blank_words_are_skipped():
     assert cues == [Cue("c0001", 1_000, 1_001, "Hi.")]
 
 
-def make_document():
+def make_rows():
     cues = [
         Cue("c0001", 0, 1_000, "Hi."),
         Cue("c0002", 1_000, 2_000, "Hello."),
@@ -71,36 +71,43 @@ def make_document():
         turns=[Turn(0, 1_100, 1), Turn(1_100, 2_000, 0), Turn(4_900, 6_000, 1)],
         centroids=[[1.0, 0.0], [0.6, 0.8]],
     )
-    return cue_document(source="ep.mp3", duration_ms=6_000, language="en", cues=cues, tracks=tracks)
+    return cue_rows(cues, tracks)
 
 
-def test_speakers_are_numbered_by_first_cue_and_unmatched_cues_have_no_speaker():
-    doc = make_document()
-    assert [c["speaker"] for c in doc["cues"]] == ["S1", "S2", None, "S1"]
-    assert doc["speakers"] == [
-        {"id": "S1", "speakingMs": 2_200, "cueCount": 2, "nearestSpeaker": "S2", "nearestCosine": 0.6},
-        {"id": "S2", "speakingMs": 900, "cueCount": 1, "nearestSpeaker": "S1", "nearestCosine": 0.6},
+def test_group_ids_come_from_the_first_cue_and_every_row_has_its_nearest_group():
+    rows = make_rows()
+    assert [r["groupId"] for r in rows] == ["gc0001", "gc0002", "ungrouped", "gc0001"]
+    assert rows[0] == {
+        "id": "c0001", "startMs": 0, "endMs": 1_000, "text": "Hi.",
+        "groupId": "gc0001", "nearestGroupId": "gc0002", "nearestCosine": 0.6,
+    }
+    assert (rows[1]["nearestGroupId"], rows[1]["nearestCosine"]) == ("gc0001", 0.6)
+    assert (rows[2]["nearestGroupId"], rows[2]["nearestCosine"]) == (None, None)
+    assert rows[3]["nearestGroupId"] == "gc0002"
+
+
+def test_group_table_sums_cue_durations():
+    assert group_table(make_rows()) == [
+        {"groupId": "gc0001", "speakingMs": 2_000, "cueCount": 2, "nearestGroupId": "gc0002", "nearestCosine": 0.6},
+        {"groupId": "gc0002", "speakingMs": 1_000, "cueCount": 1, "nearestGroupId": "gc0001", "nearestCosine": 0.6},
+        {"groupId": "ungrouped", "speakingMs": 1_000, "cueCount": 1, "nearestGroupId": None, "nearestCosine": None},
     ]
-    assert doc["cues"][0] == {"id": "c0001", "text": "Hi.", "startMs": 0, "endMs": 1_000, "speaker": "S1"}
-    assert (doc["version"], doc["source"], doc["durationMs"], doc["language"]) == (1, "ep.mp3", 6_000, "en")
 
 
-def test_one_speaker_has_no_nearest():
-    tracks = Tracks([Turn(0, 1_000, 0)], [[1.0, 0.0]])
-    doc = cue_document(source="x", duration_ms=1_000, language="en", cues=[Cue("c0001", 0, 900, "a")], tracks=tracks)
-    assert doc["speakers"][0]["nearestSpeaker"] is None
-    assert doc["speakers"][0]["nearestCosine"] is None
+def test_one_group_has_no_nearest():
+    rows = cue_rows([Cue("c0001", 0, 900, "a")], Tracks([Turn(0, 1_000, 0)], [[1.0, 0.0]]))
+    assert (rows[0]["groupId"], rows[0]["nearestGroupId"], rows[0]["nearestCosine"]) == ("gc0001", None, None)
 
 
 def test_vtt_has_ids_voice_tags_and_escaped_text():
-    doc = make_document()
-    doc["cues"][1]["text"] = "a < b & c"
-    assert render_vtt(doc) == (
+    rows = make_rows()
+    rows[1]["text"] = "a < b & c"
+    assert render_vtt(rows) == (
         "WEBVTT\n\n"
-        "c0001\n00:00:00.000 --> 00:00:01.000\n<v S1>Hi.\n\n"
-        "c0002\n00:00:01.000 --> 00:00:02.000\n<v S2>a &lt; b &amp; c\n\n"
+        "c0001\n00:00:00.000 --> 00:00:01.000\n<v gc0001>Hi.\n\n"
+        "c0002\n00:00:01.000 --> 00:00:02.000\n<v gc0002>a &lt; b &amp; c\n\n"
         "c0003\n00:00:02.000 --> 00:00:03.000\nSilence?\n\n"
-        "c0004\n00:00:05.000 --> 00:00:06.000\n<v S1>Back.\n"
+        "c0004\n00:00:05.000 --> 00:00:06.000\n<v gc0001>Back.\n"
     )
 
 

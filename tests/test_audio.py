@@ -8,21 +8,16 @@ import pytest
 from podcue import audio
 
 
-def test_source_name():
-    assert audio.source_name("/tmp/My Show/ep 12.mp3") == "ep 12"
-    assert audio.source_name("https://cdn.example.com/feed/ep%2012.mp3?token=x") == "ep 12"
-    assert audio.source_name("https://example.com/") == "episode"
-
-
 def test_is_url():
     assert audio.is_url("https://example.com/a.mp3")
     assert not audio.is_url("/tmp/a.mp3")
     assert not audio.is_url("C:/a.mp3")
 
 
-def test_download_names_the_file_after_the_url_suffix(tmp_path):
-    def opener(request):
+def test_download_names_the_file_after_the_url_suffix_and_sets_a_timeout(tmp_path):
+    def opener(request, timeout):
         assert request.full_url == "https://example.com/a.m4a"
+        assert timeout == audio.TIMEOUT_S
         return io.BytesIO(b"bytes")
 
     path = audio.download("https://example.com/a.m4a", tmp_path, opener=opener)

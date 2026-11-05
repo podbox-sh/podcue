@@ -13,17 +13,11 @@ from pathlib import Path
 import numpy as np
 
 RATE = 16_000
+TIMEOUT_S = 60  # per connect or read; a stalled download fails instead of hanging
 
 
 def is_url(source: str) -> bool:
     return urllib.parse.urlsplit(source).scheme in ("http", "https")
-
-
-def source_name(source: str) -> str:
-    """The output stem: the file name without its extension, for a path or a URL."""
-    path = urllib.parse.urlsplit(source).path if is_url(source) else source
-    stem = Path(urllib.parse.unquote(path)).stem
-    return stem or "episode"
 
 
 def download(url: str, directory: Path, *, opener=urllib.request.urlopen) -> Path:
@@ -31,7 +25,7 @@ def download(url: str, directory: Path, *, opener=urllib.request.urlopen) -> Pat
     target = directory / f"download{suffix}"
     print(f"podcue: downloading {url}", file=sys.stderr)
     request = urllib.request.Request(url, headers={"User-Agent": "podcue"})
-    with opener(request) as response, target.open("wb") as out:
+    with opener(request, timeout=TIMEOUT_S) as response, target.open("wb") as out:
         shutil.copyfileobj(response, out, 1 << 20)
     return target
 

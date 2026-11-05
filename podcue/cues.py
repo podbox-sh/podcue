@@ -1,4 +1,4 @@
-"""Build cues from timed words, attach diarization speakers, and render JSON and WebVTT.
+"""Build cues from timed words, attach diarization speaker groups, and render WebVTT.
 
 A cue time is only ever a slice start plus a transcriber word time, so a rerun on the same
 words gives the same cues.
@@ -13,6 +13,7 @@ from typing import NamedTuple
 from .diarize import Tracks, Turn
 from .regions import Slice
 
+UNGROUPED = "ungrouped"
 MAX_CUE_MS = 12_000  # a cue closes even when the transcriber left out punctuation
 _SENTENCE_END = re.compile(r"[.!?。！？]$")  # CJK sentences end on 。！？
 
@@ -94,50 +95,64 @@ def cosine(left: list[float], right: list[float]) -> float:
     return 0.0 if norm == 0 else dot / norm
 
 
-def cue_document(
-    *, source: str, duration_ms: int, language: str, cues: list[Cue], tracks: Tracks
-) -> dict:
-    """The `.cues.json` shape. Speakers are numbered S1, S2, ... in order of their first cue."""
-    raw_speakers = [overlapping_speaker(tracks.turns, cue.start_ms, cue.end_ms) for cue in cues]
-    ids: dict[int, str] = {}
-    for raw in raw_speakers:
-        if raw is not None and raw not in ids:
-            ids[raw] = f"S{len(ids) + 1}"
+def cue_rows(cues: list[Cue], tracks: Tracks) -> list[dict]:
+    """The `cues.json` rows. A voice's group id is `g` + its first cue id; no voice is `ungrouped`.
 
-    speakers = []
-    for raw, sid in ids.items():
-        nearest_id, nearest_score = None, None
-        for other, other_id in ids.items():
-            if other == raw:
+    `nearestGroupId`/`nearestCosine` name the other group whose ECAPA centroid is most similar to
+    this cue's group. Ties go to the smaller group id. Both are null for `ungrouped` and when
+    there is only one group.
+    """
+    speakers = [overlapping_speaker(tracks.turns, cue.start_ms, cue.end_ms) for cue in cues]
+    group_of: dict[int, str] = {}
+    for cue, speaker in zip(cues, speakers):
+        if speaker is not None and speaker not in group_of:
+            group_of[speaker] = f"g{cue.id}"
+
+    nearest: dict[int, tuple[str | None, float | None]] = {}
+    for speaker, group_id in group_of.items():
+        best_id, best_score = None, None
+        for other, other_id in group_of.items():
+            if other == speaker:
                 continue
-            score = cosine(tracks.centroids[raw], tracks.centroids[other])
-            if nearest_score is None or score > nearest_score:
-                nearest_id, nearest_score = other_id, score
-        speakers.append({
-            "id": sid,
-            "speakingMs": sum(t.end_ms - t.start_ms for t in tracks.turns if t.speaker == raw),
-            "cueCount": sum(1 for r in raw_speakers if r == raw),
-            "nearestSpeaker": nearest_id,
-            "nearestCosine": None if nearest_score is None else round(nearest_score, 4),
-        })
+            score = round(cosine(tracks.centroids[speaker], tracks.centroids[other]), 4)
+            if best_score is None or score > best_score or (score == best_score and other_id < best_id):
+                best_id, best_score = other_id, score
+        nearest[speaker] = (best_id, best_score)
 
-    return {
-        "version": 1,
-        "source": source,
-        "durationMs": duration_ms,
-        "language": language,
-        "speakers": speakers,
-        "cues": [
-            {
-                "id": cue.id,
-                "text": cue.text,
-                "startMs": cue.start_ms,
-                "endMs": cue.end_ms,
-                "speaker": None if raw is None else ids[raw],
-            }
-            for cue, raw in zip(cues, raw_speakers)
-        ],
-    }
+    rows = []
+    for cue, speaker in zip(cues, speakers):
+        group_id = UNGROUPED if speaker is None else group_of[speaker]
+        near_id, near_score = (None, None) if speaker is None else nearest[speaker]
+        rows.append({
+            "id": cue.id,
+            "startMs": cue.start_ms,
+            "endMs": cue.end_ms,
+            "text": cue.text,
+            "groupId": group_id,
+            "nearestGroupId": near_id,
+            "nearestCosine": near_score,
+        })
+    return rows
+
+
+def group_table(rows: list[dict]) -> list[dict]:
+    """The `groups.json` rows, in order of each group's first cue.
+
+    `speakingMs` is the sum of the group's cue durations (endMs - startMs), the same measure
+    `labeledShare` uses.
+    """
+    groups: dict[str, dict] = {}
+    for row in rows:
+        group = groups.setdefault(row["groupId"], {
+            "groupId": row["groupId"],
+            "speakingMs": 0,
+            "cueCount": 0,
+            "nearestGroupId": row["nearestGroupId"],
+            "nearestCosine": row["nearestCosine"],
+        })
+        group["speakingMs"] += row["endMs"] - row["startMs"]
+        group["cueCount"] += 1
+    return list(groups.values())
 
 
 def stamp(ms: int) -> str:
@@ -151,11 +166,11 @@ def _escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def render_vtt(document: dict) -> str:
+def render_vtt(rows: list[dict]) -> str:
     blocks = ["WEBVTT"]
-    for cue in document["cues"]:
+    for cue in rows:
         text = _escape(cue["text"])
-        if cue["speaker"] is not None:
-            text = f"<v {cue['speaker']}>{text}"
+        if cue["groupId"] != UNGROUPED:
+            text = f"<v {cue['groupId']}>{text}"
         blocks.append(f"{cue['id']}\n{stamp(cue['startMs'])} --> {stamp(cue['endMs'])}\n{text}")
     return "\n\n".join(blocks) + "\n"

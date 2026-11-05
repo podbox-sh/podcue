@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Protocol
 
 import numpy as np
@@ -17,7 +18,7 @@ LANGUAGES = NEEDLE_LANGUAGES + tuple(MOONSHINE_ARCH)
 
 MOONSHINE_MISSING = (
     "Japanese, Korean and Chinese use Moonshine, which is an optional extra. "
-    "Run: uvx --from 'podcue[moonshine]' podcue <audio> --language <code>"
+    "Run: uvx --from 'podcue[moonshine]' podcue start <audio> --language <code>"
 )
 
 
@@ -64,6 +65,9 @@ def moonshine_words(lines: list[dict]) -> list[Word]:
 
 class NeedleTranscriber:
     def __init__(self, language: str):
+        # cactus-needle sends anonymous usage counts unless NEEDLE_TELEMETRY is "0".
+        # Off by default here; a value the user set is left alone.
+        os.environ.setdefault("NEEDLE_TELEMETRY", "0")
         import needle
 
         self._needle = needle

@@ -15,8 +15,9 @@ class Opener:
         self.body = body
         self.calls = 0
 
-    def __call__(self, request):
+    def __call__(self, request, timeout):
         self.calls += 1
+        assert timeout == weights.TIMEOUT_S
         assert request.get_header("User-agent") == "podcue"
         return io.BytesIO(self.body)
 
@@ -52,7 +53,7 @@ def test_ensure_rejects_a_bad_download_and_leaves_nothing(tmp_path, body, messag
     assert list(tmp_path.iterdir()) == []
 
 
-def test_pins_match_poddrill():
+def test_pins_are_the_reviewed_values():
     assert weights.ECAPA.bytes == 24_861_931
     assert weights.ECAPA.sha256 == "f901ae3571912bad4e11e157744cb8b7d77a0b46923b83c410bdbb6c77d69736"
     assert weights.ECAPA.license == "CC BY 4.0"

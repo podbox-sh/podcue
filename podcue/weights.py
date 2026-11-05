@@ -15,6 +15,8 @@ from pathlib import Path
 
 import platformdirs
 
+TIMEOUT_S = 60  # per connect or read; a stalled download fails instead of hanging
+
 
 @dataclass(frozen=True)
 class Pin:
@@ -79,7 +81,7 @@ def ensure(pin: Pin, directory: Path | None = None, *, opener=urllib.request.url
     print(f"podcue: downloading {pin.label} weights ({pin.bytes / 1e6:.1f} MB, {pin.license})", file=sys.stderr)
     try:
         request = urllib.request.Request(pin.url, headers={"User-Agent": "podcue"})
-        with opener(request) as response, partial.open("wb") as out:
+        with opener(request, timeout=TIMEOUT_S) as response, partial.open("wb") as out:
             for block in iter(lambda: response.read(1 << 20), b""):
                 out.write(block)
         size = partial.stat().st_size
