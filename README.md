@@ -360,6 +360,12 @@ Unit tests do not install the `recap` extra. They stub Kokoro and the downloader
 
 The smoke test synthesizes a short two-voice clip and runs the whole flow through the real CLI and models: start, cues, label-groups, start-summary, post-paragraph, set-summary, summary, check. It uses macOS `say` (and expects two groups) or `espeak-ng` (whose voices usually cluster as one). It skips with the reason when ffmpeg or a synthesizer is missing.
 
+## Releasing
+
+Bump `version` in `pyproject.toml` and `__version__` in `podcue/__init__.py` to the same value, then run `uv lock` so the lockfile matches. Merge that to `main`.
+
+Create a GitHub release tagged `v` plus that version, for example `v0.2.0`. Publishing the release runs [publish.yml](.github/workflows/publish.yml). It builds the sdist and wheel, checks that the built version matches the tag with a leading `v` removed, and publishes to PyPI with trusted publishing. The workflow stores no PyPI token. Running the workflow by hand (`workflow_dispatch`) publishes the selected commit the same way, without the tag check.
+
 ## License
 
 MIT License. Copyright 2026 Jianyu Zhao. Model weights are separate; see [Weights and licenses](#weights-and-licenses) and [NOTICE](NOTICE).
