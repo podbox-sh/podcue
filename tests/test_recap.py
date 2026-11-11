@@ -23,7 +23,7 @@ from podcue.store import Episode
 
 
 def test_version_is_0_2_0():
-    assert __version__ == "0.2.0"
+    assert __version__ == "0.2.1"
 
 
 def test_importing_the_cli_does_not_load_the_recap_extra():

@@ -20,13 +20,21 @@ pyannote segmentation-3.0 (segmentation.onnx)
   https://huggingface.co/onnx-community/pyannote-segmentation-3.0
   License: MIT.
 
-cactus-needle 3.2.0 (speech-to-text for en de fr es it nl pl)
-  https://github.com/cactus-compute/needle
-  License: Apache-2.0 (per the installed package metadata),
-  https://www.apache.org/licenses/LICENSE-2.0
-  It downloads its Whistle weights from https://huggingface.co/Cactus-Compute/whistle
-  under the terms on that page. podcue turns its usage telemetry off
-  (NEEDLE_TELEMETRY=0) unless the user has set NEEDLE_TELEMETRY.
+cactus-compute 4.1.0 (speech-to-text for en de fr es it nl pl; optional `asr` extra)
+  https://github.com/cactus-compute/cactus
+  License: Apache-2.0.
+  Also installed by the `recap` extra. Not imported unless a start actually transcribes.
+  The package downloads the Needle engine and Whistle weights from pinned commits,
+  and checks them against the SHA-256 values it ships. It does not fetch those
+  files from the moving `main` revision.
+  Engine: https://huggingface.co/Cactus-Compute/cactus
+    revision 4e822c9036be2eb0e47ef556df32a818bb1572ef
+  Whistle weights: https://huggingface.co/Cactus-Compute/whistle
+    revision 741118687e1f008f06d1351a402a731274789790
+  It depends on Pillow (HPND).
+  podcue turns its usage telemetry off (CACTUS_TELEMETRY=0) unless the user
+  has set CACTUS_TELEMETRY. CI also disables it, because the package skips
+  telemetry when CI is set.
 
 Moonshine (ja, ko, zh only; optional `moonshine` extra)
   Downloaded by the moonshine-voice package. The non-English Moonshine models are

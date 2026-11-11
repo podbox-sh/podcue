@@ -1,4 +1,7 @@
-"""Speech to timed words. cactus-needle (Whistle) for European languages, Moonshine for ja/ko/zh."""
+"""Speech to timed words. cactus-compute (Whistle) for European languages, Moonshine for ja/ko/zh.
+
+Both engines are imported only when a built-in transcription actually runs.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +22,11 @@ LANGUAGES = NEEDLE_LANGUAGES + tuple(MOONSHINE_ARCH)
 MOONSHINE_MISSING = (
     "Japanese, Korean and Chinese use Moonshine, which is an optional extra. "
     "Run: uvx --from 'podcue[moonshine]' podcue start <audio> --language <code>"
+)
+ASR_MISSING = (
+    "built-in speech-to-text is the asr extra (cactus-compute). "
+    "Run: uvx --from 'podcue[asr]' podcue start <audio> "
+    "or pass --transcript with timed words from your own model."
 )
 
 
@@ -41,11 +49,11 @@ def _finite(value: object, field: str) -> float:
 
 
 def needle_words(result: dict) -> list[Word]:
-    """Words from one needle.transcribe result. Silence has no `words` key."""
+    """Words from one cactus.transcribe result. Silence has no `words` key."""
     words = result.get("words")
     if words is None:
         if result.get("text"):
-            raise ValueError("cactus-needle returned speech without word timestamps")
+            raise ValueError("cactus-compute returned speech without word timestamps")
         return []
     return [Word(str(w["word"]), _finite(w["start"], "start"), _finite(w["end"], "end")) for w in words]
 
@@ -65,16 +73,19 @@ def moonshine_words(lines: list[dict]) -> list[Word]:
 
 class NeedleTranscriber:
     def __init__(self, language: str):
-        # cactus-needle sends anonymous usage counts unless NEEDLE_TELEMETRY is "0".
-        # Off by default here; a value the user set is left alone.
-        os.environ.setdefault("NEEDLE_TELEMETRY", "0")
-        import needle
-
-        self._needle = needle
+        # cactus-compute counts anonymous usage unless CACTUS_TELEMETRY is "0".
+        # Off by default here; a value the caller set is left alone. Imported only when
+        # built-in transcription runs, not when podcue itself is imported.
+        os.environ.setdefault("CACTUS_TELEMETRY", "0")
+        try:
+            import cactus
+        except ModuleNotFoundError as error:
+            raise RuntimeError(ASR_MISSING) from error
+        self._cactus = cactus
         self._language = language
 
     def transcribe(self, samples: np.ndarray) -> list[Word]:
-        result = self._needle.transcribe(samples, language=self._language, word_timestamps=True)
+        result = self._cactus.transcribe(samples, language=self._language, word_timestamps=True)
         return needle_words(result)
 
 

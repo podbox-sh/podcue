@@ -14,4 +14,16 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
-      - run: uv run --python ${{ matrix.python }} pytest --ignore tests/test_smoke.py
+      - run: uv run --python ${{ matrix.python }} pytest --ignore tests/test_smoke.py --ignore tests/test_start_en.py
+
+  transcribe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - name: Install ffmpeg and espeak-ng
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg espeak-ng
+      - name: Start a short clip with built-in ASR and with --transcript
+        env:
+          PODCUE_LIVE_EN: "1"
+        run: uv run --python 3.12 --extra asr pytest tests/test_start_en.py -s -q

@@ -1,6 +1,6 @@
 [project]
 name = "podcue"
-version = "0.2.0"
+version = "0.2.1"
 description = "Turn podcast audio into timed, speaker-grouped cues an agent can read."
 readme = "README.md"
 license = "MIT"
@@ -8,7 +8,6 @@ license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Jianyu Zhao" }]
 requires-python = ">=3.12,<3.15"
 dependencies = [
-  "cactus-needle==3.2.0",
   "numpy==2.5.4",
   "onnxruntime==1.31.0",
   "platformdirs==4.14.5",
@@ -16,10 +15,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# cactus-compute 4.1.0 pins its engine and Whistle downloads to commit SHAs.
+# It is not on the default install. `recap` includes it so a recap install can still start.
+asr = ["cactus-compute==4.1.0"]
 moonshine = ["moonshine-voice==0.1.5"]
 # Kokoro 0.9.4 declares Requires-Python <3.13. The marker keeps 3.13 and 3.14 installable
-# for transcription. Narration needs `uvx --python 3.12 --from 'podcue[recap]==0.2.0'`.
+# for a transcript-only start. Narration needs `uvx --python 3.12 --from 'podcue[recap]==0.2.1'`.
 recap = [
+  "cactus-compute==4.1.0",
   "kokoro==0.9.4; python_version < '3.13'",
   "soundfile==0.14.0",
   "yt-dlp==2026.10.26",

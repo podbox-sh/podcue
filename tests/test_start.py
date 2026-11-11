@@ -142,14 +142,14 @@ def test_a_missing_file_is_rejected_before_any_model_or_download(monkeypatch, ro
 
 
 @pytest.mark.parametrize("preset, expected", [(None, "0"), ("1", "1")])
-def test_needle_telemetry_is_off_unless_the_user_set_it(monkeypatch, preset, expected):
+def test_cactus_telemetry_is_off_unless_the_user_set_it(monkeypatch, preset, expected):
     if preset is None:
-        monkeypatch.delenv("NEEDLE_TELEMETRY", raising=False)
+        monkeypatch.delenv("CACTUS_TELEMETRY", raising=False)
     else:
-        monkeypatch.setenv("NEEDLE_TELEMETRY", preset)
-    monkeypatch.setitem(sys.modules, "needle", types.ModuleType("needle"))
+        monkeypatch.setenv("CACTUS_TELEMETRY", preset)
+    monkeypatch.setitem(sys.modules, "cactus", types.ModuleType("cactus"))
     transcribe.NeedleTranscriber("en")
-    assert os.environ["NEEDLE_TELEMETRY"] == expected
+    assert os.environ["CACTUS_TELEMETRY"] == expected
 
 
 def test_usage_errors_are_one_json_line(capsys):

@@ -75,10 +75,13 @@ def build_parser() -> Parser:
     def command(name: str, help: str) -> Parser:
         return sub.add_parser(name, parents=[common], help=help, description=help)
 
-    start = command("start", "transcribe and group an audio file or URL; returns when the cues are ready")
+    start = command("start", "diarize an audio file or URL and build cues, from built-in ASR or a transcript")
     start.add_argument("source", help="audio or video file, or an http(s) URL to one")
-    start.add_argument("--language", default="en", metavar="CODE",
-                       help="en de fr es it nl pl, or ja ko zh with the moonshine extra (default: en)")
+    start.add_argument("--language", default=None, metavar="CODE",
+                       help="built-in ASR: en de fr es it nl pl, or ja ko zh with the moonshine extra "
+                            "(default: en). With --transcript, any code; the file's language is used when this is omitted")
+    start.add_argument("--transcript", metavar="FILE",
+                       help='JSON {"language", "segments": [{startMs, endMs, text, words?}]} instead of built-in ASR')
 
     command("episode", "status, groups, labels and summaries of an episode").add_argument("episodeId")
 
@@ -189,8 +192,20 @@ def _store_summary(episode: Episode, document: dict) -> dict:
 
 def run_start(args, root):
     from .pipeline import start
+    from .transcript import TranscriptError, load_transcript, resolve_language
 
-    episode, created = start(args.source, args.language, root)
+    transcript_words = None
+    language = args.language
+    if args.transcript:
+        try:
+            loaded = load_transcript(Path(args.transcript))
+            language = resolve_language(args.language, loaded.language)
+        except TranscriptError as error:
+            raise Failure(str(error)) from None
+        transcript_words = loaded.words
+    else:
+        language = language or "en"
+    episode, created = start(args.source, language, root, transcript_words)
     return {"kind": "started", "created": created, "episode": episode_view(episode)}
 
 

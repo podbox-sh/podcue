@@ -20,6 +20,7 @@ from .diarize import Diarizer, Tracks
 from .regions import plan_regions
 from .store import Episode, lock_pid, read_json, release, try_lock, write_json, write_text
 from .transcribe import LANGUAGES, open_transcriber
+from .transcript import assign_words
 
 
 class Rejected(Exception):
@@ -44,10 +45,13 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def transcribe(samples, language: str, report) -> tuple[list, Tracks]:
-    """Load the models, diarize, and transcribe each region slice. `report(stage, progress)`."""
+def transcribe(samples, language: str, report, transcript_words=None) -> tuple[list, Tracks]:
+    """Diarize, then either transcribe each slice or place `transcript_words` into the slices.
+
+    `transcript_words` is absolute `(startMs, endMs, text)`. When it is set, no ASR model loads.
+    """
     report("weights", 0)
-    transcriber = open_transcriber(language)
+    transcriber = None if transcript_words is not None else open_transcriber(language)
     ecapa = weights.ensure(weights.ECAPA)
     segmentation = weights.ensure(weights.SEGMENTATION)
 
@@ -56,18 +60,29 @@ def transcribe(samples, language: str, report) -> tuple[list, Tracks]:
     tracks = Diarizer(ecapa, segmentation).diarize(samples)
 
     plan = plan_regions(tracks.turns)
-    results = []
-    for piece in plan:
-        report("transcribe", piece.index * 100 // len(plan))
-        log(f"transcribing slice {piece.index + 1}/{len(plan)}")
-        results.append((piece, transcriber.transcribe(audio.span(samples, piece.start_ms, piece.end_ms))))
-    return build_cues(results), tracks
+    if transcript_words is not None:
+        results, dropped = assign_words(plan, transcript_words)
+        if dropped:
+            log(f"{dropped} transcript words started outside detected speech and were left out")
+        report("transcribe", 99)
+    else:
+        results = []
+        for piece in plan:
+            report("transcribe", piece.index * 100 // len(plan))
+            log(f"transcribing slice {piece.index + 1}/{len(plan)}")
+            results.append((piece, transcriber.transcribe(audio.span(samples, piece.start_ms, piece.end_ms))))
+    return build_cues(results, language), tracks
 
 
-def start(source: str, language: str, root: Path) -> tuple[Episode, bool]:
-    """Returns the episode and whether this call wrote its cues. Raises Rejected or the failure."""
-    if language not in LANGUAGES:
+def start(source: str, language: str, root: Path, transcript_words=None) -> tuple[Episode, bool]:
+    """Returns the episode and whether this call wrote its cues. Raises Rejected or the failure.
+
+    `transcript_words` skips built-in ASR. `language` is then any code, not only the built-in list.
+    """
+    if transcript_words is None and language not in LANGUAGES:
         raise Rejected("unknown-language", f"unknown language {language}; use one of {' '.join(LANGUAGES)}")
+    if not language or not isinstance(language, str):
+        raise Rejected("unknown-language", "language must be a non-empty code")
     local = None
     if not audio.is_url(source):
         local = Path(source).expanduser()
@@ -112,7 +127,7 @@ def start(source: str, language: str, root: Path) -> tuple[Episode, bool]:
                 "language": language,
                 "createdAt": previous.get("createdAt", now()),
             })
-            cues, tracks = transcribe(samples, language, report)
+            cues, tracks = transcribe(samples, language, report, transcript_words)
             report("write", 99)
             rows = cue_rows(cues, tracks)
             write_text(episode.transcript, render_vtt(rows))
