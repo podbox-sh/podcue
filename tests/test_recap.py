@@ -74,7 +74,7 @@ def test_voice_preset_and_a_bare_segment_array():
     assert resolve_voice(preset.voice, preset.voice_preset, preset.segments[0], 1) == "af_heart"
     assert resolve_voice(preset.voice, preset.voice_preset, None, 1) == "am_puck"
     bare = parse_script([{"type": "narration", "text": "Hi."}])
-    assert resolve_voice(bare.voice, bare.voice_preset, bare.segments[0], 1) == "am_puck"
+    assert resolve_voice(bare.voice, bare.voice_preset, bare.segments[0], 1) == "am_michael"
 
 
 @pytest.mark.parametrize("body, message", [
@@ -141,7 +141,7 @@ def test_narrate_names_the_recap_extra_when_kokoro_is_absent(monkeypatch, tmp_pa
 
     monkeypatch.setattr(builtins, "__import__", guarded)
     with pytest.raises(RecapError, match=rf"podcue\[recap\]=={__version__}"):
-        narrate("Hello.", "am_puck", tmp_path / "out.wav")
+        narrate("Hello.", "am_michael", tmp_path / "out.wav")
 
 
 # commands
@@ -244,6 +244,8 @@ def test_build_output_field_is_used_when_out_is_omitted(episode_id, audio_ops, t
     assert code == 0
     assert result["output"] == str((tmp_path / "produced_summary.mp3").resolve())
     assert result["flags"] == []
+    assert result["segments"][0]["voice"] == "am_michael"
+    assert audio_ops["narrate"] == [("Intro.", "am_michael")]
     assert audio_ops["stitch"] == 1
 
 

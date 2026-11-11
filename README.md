@@ -201,7 +201,7 @@ uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue build ep_3f9a1c2b7d4e5f60
 ```
 
 ```json
-{"kind": "built", "episodeId": "ep_3f9a1c2b7d4e5f60", "output": "/Users/me/recap.mp3", "report": "/Users/me/report.md", "durationMs": 312000, "loudness": {"lufs": -16.0, "truePeak": -1.5}, "flags": [], "segments": [{"index": 1, "type": "narration", "text": "Intro.", "voice": "am_puck", "lufsIn": -23.0, "lufsOut": -16.0, "flags": []}]}
+{"kind": "built", "episodeId": "ep_3f9a1c2b7d4e5f60", "output": "/Users/me/recap.mp3", "report": "/Users/me/report.md", "durationMs": 312000, "loudness": {"lufs": -16.0, "truePeak": -1.5}, "flags": [], "segments": [{"index": 1, "type": "narration", "text": "Intro.", "voice": "am_michael", "lufsIn": -23.0, "lufsOut": -16.0, "flags": []}]}
 ```
 
 Takes the episode `start` already transcribed. Clips are cut from `episode.json`'s `source`, which has to be a local file. An episode started from a URL has no audio left to cut; `fetch`, then `start` on `audio.wav`.
@@ -211,7 +211,7 @@ The output is 128 kbps MP3, or 24 kHz mono WAV when the path ends in `.wav`. `--
 What it does:
 
 1. Snap each clip to cue word times (below), with a short fade.
-2. Narrate each narration segment with Kokoro at 24 kHz on CPU. The default voice is `am_puck`.
+2. Narrate each narration segment with Kokoro at 24 kHz on CPU. The default voice is `am_michael`.
 3. Loudnorm each segment to -16 LUFS, true peak -1.5 dBTP, join them with 0.4 s of silence, loudnorm the mix, and encode it.
 4. Flag a clip whose snapped length is outside 10–20 seconds, a clip with no overlapping cue, and a clip with a second speaker. A second speaker counts when another labeled voice covers at least 1 second and 8% of the clip. Labels come from `labels.json`; an unlabeled group is named by its `groupId`. Two groups that share a label are one speaker.
 
@@ -223,7 +223,7 @@ An object, or a bare array of segments. Unknown keys are ignored.
 
 ```json
 {
-  "voice": "am_puck",
+  "voice": "am_michael",
   "output": "produced_summary.mp3",
   "segments": [
     {"type": "narration", "text": "Intro."},
@@ -235,7 +235,7 @@ An object, or a bare array of segments. Unknown keys are ignored.
 
 | Field | Where | Meaning |
 | --- | --- | --- |
-| `voice` | script or narration | Kokoro voice id. The default is `am_puck`. `american-male-puck` maps to `am_puck` and `american-female-heart` maps to `af_heart`. Any other string is passed through as a Kokoro id. |
+| `voice` | script or narration | Kokoro voice id. The default, when `voice` and `voice_preset` are omitted, is `am_michael`. `american-male-puck` maps to `am_puck` and `american-female-heart` maps to `af_heart`. Any other string is passed through as a Kokoro id. |
 | `voice_preset` | script or narration | Same as `voice`, used when `voice` is absent. A narration's own `voice` or `voice_preset` wins over the script's. |
 | `output` | script | File name used when `--out` is omitted. |
 | `segments` | script | Non-empty array, in playback order. A bare array is the whole script. |

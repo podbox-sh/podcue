@@ -30,7 +30,7 @@ TARGET_TP = -1.5
 TARGET_LRA = 11.0
 # Silence inserted between segments, in seconds.
 GAP_S = 0.4
-DEFAULT_VOICE = "am_puck"
+DEFAULT_VOICE = "am_michael"
 # PodBox preset names the script may already use, mapped onto Kokoro voice ids.
 VOICE_ALIASES = {
     "american-male-puck": "am_puck",
@@ -111,7 +111,7 @@ def _voice_field(segment: dict, field: str, index: int) -> str | None:
 
 
 def resolve_voice(script_voice: str | None, script_preset: str | None, segment: dict | None, index: int) -> str:
-    """Kokoro id for one narration. A segment voice wins, then the script voice, then `am_puck`."""
+    """Kokoro id for one narration. A segment voice wins, then the script voice, then `am_michael`."""
     raw = None
     if segment is not None:
         raw = _voice_field(segment, "voice", index) or _voice_field(segment, "voice_preset", index)
