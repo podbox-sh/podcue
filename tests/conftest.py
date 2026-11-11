@@ -42,7 +42,7 @@ class Engine:
         self.during = None  # called inside a fake transcribe, after the first progress report
         self.error = None
 
-    def transcribe(self, samples, language, report):
+    def transcribe(self, samples, language, report, transcript_words=None):
         self.calls += 1
         report("diarize", 0)
         if self.during is not None:

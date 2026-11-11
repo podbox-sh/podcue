@@ -31,7 +31,12 @@ def test_sentence_punctuation_closes_a_cue():
 
 def test_cjk_full_stop_closes_a_cue():
     words = [Word("今日は", 0.0, 0.5), Word("晴れ。", 0.5, 1.0), Word("明日", 1.1, 1.5)]
-    assert [c.text for c in build_cues([(whole(0, 5_000), words)])] == ["今日は 晴れ。", "明日"]
+    assert [c.text for c in build_cues([(whole(0, 5_000), words)], language="ja")] == ["今日は 晴れ。", "明日"]
+
+
+def test_english_does_not_close_on_an_ideographic_full_stop():
+    words = [Word("晴れ。", 0.0, 0.5), Word("next", 0.6, 1.0)]
+    assert [c.text for c in build_cues([(whole(0, 5_000), words)])] == ["晴れ。 next"]
 
 
 def test_a_cue_closes_after_twelve_seconds_without_punctuation():

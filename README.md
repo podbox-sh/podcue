@@ -9,8 +9,9 @@ podcue is a local-only command line tool. Every command runs in the foreground, 
 - Python 3.12, 3.13 or 3.14 (onnxruntime 1.31.0 has no wheels for other versions). With [uv](https://docs.astral.sh/uv/) you don't need to install anything else in Python.
 - `ffmpeg` on `PATH`.
 - macOS or Linux (the episode lock uses `flock`).
-- Network access on the first `start`, to download model weights. The first narration also downloads Kokoro weights.
-- The `recap` extra for `fetch` of a page and for `build`: `kokoro`, `soundfile`, and `yt-dlp`. Kokoro 0.9.4 narrates on Python 3.12. Transcription on 3.13 and 3.14 does not install it.
+- Network access on the first `start`, to download the diarization weights and, with the `asr` extra, the pinned speech model. The first narration also downloads Kokoro weights.
+- The `asr` extra (`cactus-compute` 4.1.0) for built-in speech-to-text in `en de fr es it nl pl`. Without it, pass `--transcript`. `ja ko zh` still need the `moonshine` extra.
+- The `recap` extra for `fetch` of a page and for `build`: `kokoro`, `soundfile`, and `yt-dlp`, plus `cactus-compute` so a recap install can still `start`. Kokoro 0.9.4 narrates on Python 3.12.
 
 ## Agent workflow
 
@@ -32,11 +33,11 @@ Each write is validated when it's made, so there is no fix loop. `podcue check` 
 `fetch` and `build` need the `recap` extra. `start`, `cues`, and `label-groups` are unchanged; installing the extra is enough to run the whole recap, because the extra is a superset of the base package.
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue fetch https://example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue start ./ep/audio.wav
-uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
-uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
-uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue fetch https://example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue start ./ep/audio.wav
+uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
+uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
+uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 Pass `--python 3.12`. Kokoro 0.9.4 declares `Requires-Python: <3.13`. A direct media URL downloads without yt-dlp; a page URL needs it, from the same extra. Plain `uvx podcue` does not install the extra, so transcription stays light.
@@ -55,12 +56,13 @@ The examples below come from a short two-voice clip. The ids, paths and cosines 
 
 ## Commands
 
-### `podcue start <file or URL> [--language CODE]`
+### `podcue start <file or URL> [--language CODE] [--transcript FILE]`
 
 ```sh
-uvx podcue start ep12.mp3
-uvx podcue start https://example.com/ep12.mp3
+uvx --from 'podcue[asr]' podcue start ep12.mp3
+uvx --from 'podcue[asr]' podcue start https://example.com/ep12.mp3
 uvx --from 'podcue[moonshine]' podcue start ep12.m4a --language ja
+uvx podcue start ep12.mp3 --transcript transcript.json
 ```
 
 ```json
@@ -72,9 +74,34 @@ uvx --from 'podcue[moonshine]' podcue start ep12.m4a --language ja
 - Idempotent: when the folder already has `cues.json`, `start` returns it with `"created": false` and loads no model. `--language` is then ignored, and the episode keeps its first language.
 - A start that failed or was interrupted is rerun by the next `start` of the same audio.
 - A second `start` of the same episode while one is running exits 1 with `"reason": "running"`.
-- `--language` is one of `en de fr es it nl pl` (cactus-needle), or `ja ko zh` (Moonshine, from the `moonshine` extra). The default is `en`. **`ja`, `ko` and `zh` are experimental.** In testing, Moonshine dropped the opening greeting 「こんにちは。」 of a Japanese clip and returned the rest as one cue without word times.
+- `--language`, for built-in ASR, is one of `en de fr es it nl pl` (`cactus-compute`, the `asr` extra), or `ja ko zh` (Moonshine, from the `moonshine` extra). The default is `en`. **`ja`, `ko` and `zh` are experimental.** In testing, Moonshine dropped the opening greeting 「こんにちは。」 of a Japanese clip and returned the rest as one cue without word times.
+- `--transcript FILE` skips built-in ASR. Diarization and cue building still run. The schema is below.
 
-How it works: podcue converts the audio to 16 kHz mono WAV and diarizes the whole episode (pyannote segmentation plus ECAPA embeddings). It joins each speaker's turns into regions, transcribes the regions in slices of up to 28 seconds, and groups the words into cues. A cue ends at sentence punctuation, after 12 seconds, or where a speaker region ends. **Speech the diarizer misses (outside the detected speech regions) is not transcribed.** Each cue gets the group whose diarization turns overlap it most, or `ungrouped` when none does.
+#### `--transcript` file
+
+```json
+{
+  "language": "en",
+  "segments": [
+    {
+      "startMs": 80,
+      "endMs": 2400,
+      "text": "Welcome back to the show.",
+      "words": [
+        {"startMs": 80, "endMs": 480, "text": "Welcome"},
+        {"startMs": 500, "endMs": 900, "text": "back"},
+        {"startMs": 920, "endMs": 1100, "text": "to"},
+        {"startMs": 1120, "endMs": 1400, "text": "the"},
+        {"startMs": 1420, "endMs": 2400, "text": "show."}
+      ]
+    }
+  ]
+}
+```
+
+`segments` is required and non-empty. Each segment has integer `startMs`, `endMs` (greater than `startMs`), and non-empty `text`. `words` is optional. A word has the same three fields and must sit inside its segment, in time order. Segments are in time order. With no `words`, the text is split on whitespace and spread across the segment by character length. Cue text then comes from those words. `language` is required in the file unless you pass `--language`. Any code is accepted, not only the built-in list, and it is stored on the episode (compared case-insensitively: `EN` and `en` match, `en` and `en-US` do not). If the flag and the file both set a language and they differ, start exits 1 with `{"kind":"error"}`. That language is what closes a cue: `ja`, `zh`, and `ko` also close on `。！？`; every other code closes on `.`, `!`, and `?`. A word that starts outside a detected speech region is left out.
+
+How it works: podcue converts the audio to 16 kHz mono WAV and diarizes the whole episode (pyannote segmentation plus ECAPA embeddings). It joins each speaker's turns into regions, transcribes the regions in slices of up to 28 seconds (or places your transcript words into those slices), and groups the words into cues. A cue ends at sentence punctuation for the episode language, after 12 seconds, or where a speaker region ends. **Speech the diarizer misses (outside the detected speech regions) is not transcribed,** and a transcript word that starts there is left out. Each cue gets the group whose diarization turns overlap it most, or `ungrouped` when none does. Built-in ASR is not imported for `--transcript`, nor for `fetch`, `cues`, `label-groups`, `build`, or `--help`.
 
 ### `podcue episode <episodeId>`
 
@@ -181,8 +208,8 @@ It fails, listing every problem, when:
 ### `podcue fetch <URL> [--out DIR]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
 ```
 
 ```json
@@ -197,7 +224,7 @@ uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue fetch https://www.youtube
 ### `podcue build <episodeId> <script.json> [--out FILE]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 ```json
@@ -315,7 +342,7 @@ paragraphs:
 
 podcue runs locally. It uses the network only to download the input when you pass a URL to `start` or `fetch`, to download diarization weights on first use, and, with the recap extra, to download Kokoro weights the first time a narration is built. `fetch` of a page also uses the network through yt-dlp. Each direct download has a 60-second connect/read timeout, so a stalled connection fails instead of hanging.
 
-cactus-needle sends anonymous usage counts by default. **podcue turns that off** by setting `NEEDLE_TELEMETRY=0` in its own process when `NEEDLE_TELEMETRY` is unset. If you set `NEEDLE_TELEMETRY` yourself, podcue leaves it alone. The same for Hugging Face when a narration loads Kokoro: `HF_HUB_DISABLE_TELEMETRY=1` unless you have set it.
+cactus-compute counts anonymous usage by default. **podcue turns that off** by setting `CACTUS_TELEMETRY=0` in its own process when `CACTUS_TELEMETRY` is unset. If you set `CACTUS_TELEMETRY` yourself, podcue leaves it alone. The same for Hugging Face when a narration loads Kokoro: `HF_HUB_DISABLE_TELEMETRY=1` unless you have set it.
 
 ## Weights and licenses
 
@@ -328,7 +355,7 @@ On first use podcue downloads two pinned ONNX files into the user cache director
 
 - **ECAPA:** an ECAPA-TDNN512 trained with [WeSpeaker](https://github.com/wenet-e2e/wespeaker) (Apache-2.0 code) on VoxCeleb. Credit for the CC BY 4.0 weights goes to VoxCeleb (Nagrani, Chung, Xie, Zisserman), https://www.robots.ox.ac.uk/~vgg/data/voxceleb/. The model card has no license field. WeSpeaker says pretrained models follow the license of their training data, so the CC BY 4.0 attribution travels with the file.
 - **Segmentation:** pyannote segmentation-3.0 powerset model, MIT license.
-- **Speech-to-text (`en de fr es it nl pl`):** [cactus-needle](https://github.com/cactus-compute/needle) 3.2.0, licensed [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) per its package metadata. It downloads its Whistle weights from [Cactus-Compute/whistle](https://huggingface.co/Cactus-Compute/whistle) under the terms on that page.
+- **Speech-to-text (`en de fr es it nl pl`):** [cactus-compute](https://github.com/cactus-compute/cactus) 4.1.0, the `asr` extra, licensed [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0). It installs the Needle engine and Whistle weights from pinned commit SHAs (not the moving `main` branch): engine `Cactus-Compute/cactus` @ `4e822c9036be2eb0e47ef556df32a818bb1572ef`, Whistle weights `Cactus-Compute/whistle` @ `741118687e1f008f06d1351a402a731274789790`. Each download is checked against the checksums shipped in that package. `podcue[recap]` includes this extra.
 - **Moonshine (`ja ko zh` only):** moonshine-voice 0.1.5, from the `moonshine` extra, downloads the model into `<cache>/moonshine` and verifies it against its own CRC32C catalog. The non-English Moonshine models are under the non-commercial [Moonshine Community License](https://www.moonshine.ai/license). Those terms apply only when you run with `--language ja|ko|zh`. No other language is routed to Moonshine.
 
 The weights are not part of this package and are not covered by its MIT license. See [NOTICE](NOTICE).
@@ -352,11 +379,12 @@ The `moonshine` extra is separate and unchanged: its non-English models are non-
 
 ```sh
 uv run pytest                                  # unit tests + smoke test
-uv run pytest --ignore tests/test_smoke.py     # unit tests only
-uv run --extra moonshine pytest tests/test_smoke.py   # adds the Japanese Moonshine smoke case
+uv run pytest --ignore tests/test_smoke.py --ignore tests/test_start_en.py
+uv run --extra moonshine pytest tests/test_smoke.py
+PODCUE_LIVE_EN=1 uv run --extra asr pytest tests/test_start_en.py
 ```
 
-Unit tests do not install the `recap` extra. They stub Kokoro and the downloader. `build` and `fetch` still need ffmpeg only when those stubs are not in place.
+Unit tests do not install the `asr` or `recap` extras. They stub Kokoro, the downloader, and diarization. `build` and `fetch` still need ffmpeg only when those stubs are not in place. `tests/test_start_en.py` runs a real `start` on espeak-ng speech, once with the `asr` extra and once with `--transcript`. It skips unless `PODCUE_LIVE_EN=1`.
 
 The smoke test synthesizes a short two-voice clip and runs the whole flow through the real CLI and models: start, cues, label-groups, start-summary, post-paragraph, set-summary, summary, check. It uses macOS `say` (and expects two groups) or `espeak-ng` (whose voices usually cluster as one). It skips with the reason when ffmpeg or a synthesizer is missing.
 
@@ -364,7 +392,9 @@ The smoke test synthesizes a short two-voice clip and runs the whole flow throug
 
 Bump `version` in `pyproject.toml` and `__version__` in `podcue/__init__.py` to the same value, then run `uv lock` so the lockfile matches. Merge that to `main`.
 
-Create a GitHub release tagged `v` plus that version, for example `v0.2.0`. Publishing the release runs [publish.yml](.github/workflows/publish.yml). It builds the sdist and wheel, checks that the built version matches the tag with a leading `v` removed, and publishes to PyPI with trusted publishing. The workflow stores no PyPI token. Running the workflow by hand (`workflow_dispatch`) publishes the selected commit the same way, without the tag check.
+Create a GitHub release tagged `v` plus that version, for example `v0.2.1`. Publishing the release runs [publish.yml](.github/workflows/publish.yml). It builds the sdist and wheel, checks that the built version matches the tag with a leading `v` removed, and publishes to PyPI with trusted publishing. The workflow stores no PyPI token. Running the workflow by hand (`workflow_dispatch`) publishes the selected commit the same way, without the tag check.
+
+0.2.1 moves built-in speech-to-text to the `asr` extra (`cactus-compute` 4.1.0, whose engine download is pinned to a commit) and adds `podcue start --transcript` for a model's own timed words. The transcript object is `{"language", "segments": [{startMs, endMs, text, words?}]}`.
 
 ## License
 

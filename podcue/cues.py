@@ -15,7 +15,9 @@ from .regions import Slice
 
 UNGROUPED = "ungrouped"
 MAX_CUE_MS = 12_000  # a cue closes even when the transcriber left out punctuation
-_SENTENCE_END = re.compile(r"[.!?。！？]$")  # CJK sentences end on 。！？
+_CJK = {"ja", "zh", "ko"}
+_LATIN_END = re.compile(r"[.!?]$")
+_CJK_END = re.compile(r"[.!?。！？]$")  # ja, zh, and ko also close on 。！？
 
 
 class Word(NamedTuple):
@@ -43,11 +45,25 @@ def cue_id(index: int) -> str:
     return f"c{index + 1:04d}"
 
 
-def build_cues(results: list[tuple[Slice, list[Word]]]) -> list[Cue]:
+def sentence_end(language: str) -> re.Pattern[str]:
+    """The punctuation that closes a cue for `language`.
+
+    `ja`, `zh`, and `ko` (and codes that start with them, such as `zh-Hans`) also close on 。！？.
+    Every other code closes on `.`, `!`, and `?`.
+    """
+    code = language.casefold().split("-", 1)[0]
+    if code in _CJK:
+        return _CJK_END
+    return _LATIN_END
+
+
+def build_cues(results: list[tuple[Slice, list[Word]]], language: str = "en") -> list[Cue]:
     """Keep each word that starts inside its slice's keep window, then group words into cues.
 
-    A cue closes on sentence punctuation, after MAX_CUE_MS, and where one speaker region ends.
+    A cue closes on sentence punctuation for `language`, after MAX_CUE_MS, and where one speaker
+    region ends.
     """
+    closes = sentence_end(language)
     cues: list[Cue] = []
     bucket: list[tuple[int, int, str]] = []
     bucket_region = -1
@@ -74,7 +90,7 @@ def build_cues(results: list[tuple[Slice, list[Word]]]) -> list[Cue]:
                 close()
             bucket_region = piece.region
             bucket.append((start, end, text))
-            if _SENTENCE_END.search(text):
+            if closes.search(text):
                 close()
     close()
     return cues
