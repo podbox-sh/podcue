@@ -33,4 +33,45 @@ Moonshine (ja, ko, zh only; optional `moonshine` extra)
   released under the non-commercial Moonshine Community License:
   https://www.moonshine.ai/license
   Those terms apply only when podcue runs with --language ja, ko or zh. No other
-  language is routed to Moonshine.
+  language is routed to Moonshine. The recap extra does not use Moonshine.
+
+Recap extra (`podcue[recap]`): Kokoro narration, soundfile, and yt-dlp.
+  These are not installed by a plain `podcue` install. Commercial use is allowed
+  for each direct dependency below. Two transitive packages are GPL-3.0-or-later;
+  distributing a combined work that links them carries GPL-3 obligations. podcue
+  does not vendor them.
+
+kokoro 0.9.4 (narration; Python >=3.10, <3.13)
+  https://github.com/hexgrad/kokoro
+  License: Apache-2.0.
+  Voices and weights: hexgrad/Kokoro-82M, Apache-2.0,
+  https://huggingface.co/hexgrad/Kokoro-82M
+  Downloaded on first narration into the Hugging Face cache. Not part of this package.
+  Training audio under CC BY, used for a few hours of Kokoro v1.0: Koniwa `tnc`
+  (CC BY 3.0, under 1 hour) and SIWIS (CC BY 4.0, under 11 hours). See the model card.
+
+misaki 0.9.4, extra `en` (grapheme-to-phoneme, required by kokoro)
+  https://github.com/hexgrad/misaki
+  License: Apache-2.0.
+  The `en` extra also installs:
+  phonemizer-fork (GPL-3.0-or-later), https://pypi.org/project/phonemizer-fork/
+  espeakng-loader, https://pypi.org/project/espeakng-loader/
+    The loader's package metadata declares no license. It redistributes the
+    espeak-ng shared library, which is GPL-3.0-or-later:
+    https://github.com/espeak-ng/espeak-ng/blob/master/COPYING
+  num2words (LGPL), https://github.com/savoirfairelinux/num2words
+  English narration tries espeak only for out-of-dictionary words and continues
+  if that fallback does not load.
+  torch (BSD-3-Clause) and transformers (Apache-2.0) are pulled in by kokoro.
+
+soundfile 0.14.0
+  https://github.com/bastibe/python-soundfile
+  License: BSD-3-Clause.
+  Wheels bundle libsndfile, LGPL-2.1 or LGPL-3.0, loaded as a shared library:
+  https://github.com/libsndfile/libsndfile
+
+yt-dlp 2026.10.26
+  https://github.com/yt-dlp/yt-dlp
+  License: The Unlicense (public domain). The PyPI wheel and the source
+  distribution are Unlicense. This extra does not install the PyInstaller
+  executable, which yt-dlp documents as GPL-3.0-or-later because of bundled code.
