@@ -1,6 +1,6 @@
 # podcue
 
-Turn podcast audio into timed, speaker-grouped cues, label the voices, and store summaries whose paragraphs cite those cues.
+Turn podcast audio into timed, speaker-grouped cues, label the voices, and store summaries whose paragraphs cite those cues. The optional `recap` extra downloads an episode and stitches a narrated clip recap.
 
 podcue is a local-only command line tool. Every command runs in the foreground, prints one JSON line, and exits. It runs no daemon, queue, or server. All state lives in files in one folder per episode. Agents can use it alongside the [PodBox skills](https://github.com/podbox-sh/skills), but they don't have to.
 
@@ -9,7 +9,8 @@ podcue is a local-only command line tool. Every command runs in the foreground, 
 - Python 3.12, 3.13 or 3.14 (onnxruntime 1.31.0 has no wheels for other versions). With [uv](https://docs.astral.sh/uv/) you don't need to install anything else in Python.
 - `ffmpeg` on `PATH`.
 - macOS or Linux (the episode lock uses `flock`).
-- Network access on the first `start`, to download model weights.
+- Network access on the first `start`, to download model weights. The first narration also downloads Kokoro weights.
+- The `recap` extra for `fetch` of a page and for `build`: `kokoro`, `soundfile`, and `yt-dlp`. Kokoro 0.9.4 narrates on Python 3.12. Transcription on 3.13 and 3.14 does not install it.
 
 ## Agent workflow
 
@@ -25,6 +26,20 @@ For an hour-long episode with ~700 cues, this is about 13 tool calls:
 8. `podcue summary <episodeId> <summaryId>` reads the result back.
 
 Each write is validated when it's made, so there is no fix loop. `podcue check` exists for summary files written by hand.
+
+## Recap
+
+`fetch` and `build` need the `recap` extra. `start`, `cues`, and `label-groups` are unchanged; installing the extra is enough to run the whole recap, because the extra is a superset of the base package.
+
+```sh
+uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue fetch https://example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue start ./ep/audio.wav
+uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
+uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
+uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+```
+
+Pass `--python 3.12`. Kokoro 0.9.4 declares `Requires-Python: <3.13`. A direct media URL downloads without yt-dlp; a page URL needs it, from the same extra. Plain `uvx podcue` does not install the extra, so transcription stays light.
 
 ## Output
 
@@ -163,6 +178,74 @@ It fails, listing every problem, when:
 - `startMs` or `endMs` is missing, or doesn't equal the earliest cited cue's start or the latest cited cue's end.
 - A group cited through a paragraph's cues has no entry in `labels.json`. `ungrouped` cues need no label, and `quote` and `ending` count as labels. A cited group labeled `undetermined` adds a `warnings` entry but doesn't fail the check, because labeling stops at about 95% of spoken time on purpose.
 
+### `podcue fetch <URL> [--out DIR]`
+
+```sh
+uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
+```
+
+```json
+{"kind": "fetched", "url": "https://cdn.example.com/ep.mp3", "path": "/Users/me/ep/audio.wav", "durationMs": 3600000, "via": "direct"}
+```
+
+- Writes `<DIR>/audio.wav` (default directory: `.`): 16-bit mono 16 kHz PCM, the format `start` converts to. Pass that path to `podcue start`.
+- `via` is `direct` when the URL path ends in a media suffix (`.mp3`, `.m4a`, `.wav`, `.mp4`, and the other audio and video suffixes), query string ignored. `via` is `yt-dlp` for any other `http(s)` URL. A non-URL exits 1.
+- The direct path uses the standard library. The page path imports yt-dlp and exits 1, naming the `recap` extra, when that package is missing.
+- ffmpeg converts the download. An empty or undecodable file exits 1 with `"reason": "not-audio"`.
+
+### `podcue build <episodeId> <script.json> [--out FILE]`
+
+```sh
+uvx --python 3.12 --from "podcue[recap]==0.2.0" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+```
+
+```json
+{"kind": "built", "episodeId": "ep_3f9a1c2b7d4e5f60", "output": "/Users/me/recap.mp3", "report": "/Users/me/report.md", "durationMs": 312000, "loudness": {"lufs": -16.0, "truePeak": -1.5}, "flags": [], "segments": [{"index": 1, "type": "narration", "text": "Intro.", "voice": "am_michael", "lufsIn": -23.0, "lufsOut": -16.0, "flags": []}]}
+```
+
+Takes the episode `start` already transcribed. Clips are cut from `episode.json`'s `source`, which has to be a local file. An episode started from a URL has no audio left to cut; `fetch`, then `start` on `audio.wav`.
+
+The output is 128 kbps MP3, or 24 kHz mono WAV when the path ends in `.wav`. `--out` wins. Otherwise the script's `output` is used, else `produced_summary.mp3`, resolved from the working directory. `report.md` is written next to that file. Flags are listed in the JSON and in the report. A flagged clip still writes the file and exits 0; fix the script and build again. Narration and clip wavs are reused from `<episode>/recap-cache/` when the segment is unchanged.
+
+What it does:
+
+1. Snap each clip to cue word times (below), with a short fade.
+2. Narrate each narration segment with Kokoro at 24 kHz on CPU. The default voice is `am_michael`.
+3. Loudnorm each segment to -16 LUFS, true peak -1.5 dBTP, join them with 0.4 s of silence, loudnorm the mix, and encode it.
+4. Flag a clip whose snapped length is outside 10–20 seconds, a clip with no overlapping cue, and a clip with a second speaker. A second speaker counts when another labeled voice covers at least 1 second and 8% of the clip. Labels come from `labels.json`; an unlabeled group is named by its `groupId`. Two groups that share a label are one speaker.
+
+Kokoro is imported only for a narration segment. On Python 3.13 or 3.14, or without the extra, that import exits 1 and names the 3.12 install command. The first narration downloads the Kokoro-82M weights from Hugging Face.
+
+#### `script.json`
+
+An object, or a bare array of segments. Unknown keys are ignored.
+
+```json
+{
+  "voice": "am_michael",
+  "output": "produced_summary.mp3",
+  "segments": [
+    {"type": "narration", "text": "Intro."},
+    {"type": "clip", "start": "40:43.5", "end": "40:58.0", "speaker": "the guest"},
+    {"type": "narration", "text": "Bridge.", "voice": "american-female-heart"}
+  ]
+}
+```
+
+| Field | Where | Meaning |
+| --- | --- | --- |
+| `voice` | script or narration | Kokoro voice id. The default, when `voice` and `voice_preset` are omitted, is `am_michael`. `american-male-puck` maps to `am_puck` and `american-female-heart` maps to `af_heart`. Any other string is passed through as a Kokoro id. |
+| `voice_preset` | script or narration | Same as `voice`, used when `voice` is absent. A narration's own `voice` or `voice_preset` wins over the script's. |
+| `output` | script | File name used when `--out` is omitted. |
+| `segments` | script | Non-empty array, in playback order. A bare array is the whole script. |
+| `type` | segment | `narration` or `clip`. |
+| `text` | narration | What Kokoro reads. A non-empty string. |
+| `start`, `end` | clip | Seconds (`90.5` or `"90.5"`) or `[h:]mm:ss[.s]` (`"40:43.5"`, `"1:02:03"`). `end` must be after `start`. |
+| `speaker` | clip | Name written into the report. Optional. The default is `?`. |
+
+Cues are at most 12 seconds, so a 10–20 second clip spans two or three consecutive cues. `cues.json` has no per-word timestamps. Each cue's words are spread across that cue by character length, and each requested edge snaps to the nearest of those word times, then pads at most 0.25 s before the first word and 0.35 s after the last, stopping at the neighbouring word. The clip text in the report is those words. A clip that should be one speaker needs two or three consecutive cues from one group.
+
 ### `podcue fetch-weights`
 
 This is optional. It downloads the two pinned diarization weight files now instead of on the first `start`.
@@ -182,6 +265,7 @@ This is optional. It downloads the two pinned diarization weight files now inste
   labels.json         written by label-groups
   summaries/
     sm_8c41d07e2a9b3f15.yaml
+  recap-cache/        narration and clip wavs reused by a later build of the same segment
   status.json         only while a start runs; removed when it ends
   failed.json         only after a failed start; removed by the next start
   start.lock          holds the running start's pid (empty otherwise)
@@ -200,6 +284,7 @@ Every file is written to a temp file and renamed into place, so a reader never s
 | `summaries/sm_*.yaml` | `version: 1`, `episodeId`, `summaryId`, `summary`, and `paragraphs: [{index, part?, text, cues, startMs, endMs}]`. |
 | `status.json` | `{pid, stage, progress}`. `stage` is `weights`, `diarize`, `transcribe` or `write`, and `progress` runs 0 to 99. |
 | `failed.json` | `{message, stage, at}`. |
+| `recap-cache/` | Wav segments from `build`. Deleting it only makes the next build render those segments again. |
 
 A summary file:
 
@@ -228,9 +313,9 @@ paragraphs:
 
 ## Privacy and network
 
-podcue runs locally. It uses the network only to download the input when you pass a URL, and to download weights on first use. Each download has a 60-second connect/read timeout, so a stalled connection fails instead of hanging.
+podcue runs locally. It uses the network only to download the input when you pass a URL to `start` or `fetch`, to download diarization weights on first use, and, with the recap extra, to download Kokoro weights the first time a narration is built. `fetch` of a page also uses the network through yt-dlp. Each direct download has a 60-second connect/read timeout, so a stalled connection fails instead of hanging.
 
-cactus-needle sends anonymous usage counts by default. **podcue turns that off** by setting `NEEDLE_TELEMETRY=0` in its own process when `NEEDLE_TELEMETRY` is unset. If you set `NEEDLE_TELEMETRY` yourself, podcue leaves it alone.
+cactus-needle sends anonymous usage counts by default. **podcue turns that off** by setting `NEEDLE_TELEMETRY=0` in its own process when `NEEDLE_TELEMETRY` is unset. If you set `NEEDLE_TELEMETRY` yourself, podcue leaves it alone. The same for Hugging Face when a narration loads Kokoro: `HF_HUB_DISABLE_TELEMETRY=1` unless you have set it.
 
 ## Weights and licenses
 
@@ -248,6 +333,21 @@ On first use podcue downloads two pinned ONNX files into the user cache director
 
 The weights are not part of this package and are not covered by its MIT license. See [NOTICE](NOTICE).
 
+### Recap extra
+
+Installed only with `podcue[recap]`. Plain `uvx podcue` does not install these.
+
+| Piece | Version | License |
+| --- | --- | --- |
+| `kokoro` | 0.9.4 | Apache-2.0. Requires Python 3.10 or 3.12 (`Requires-Python: <3.13`). |
+| Kokoro-82M weights | `hexgrad/Kokoro-82M` | Apache-2.0. Downloaded on first narration, not shipped here. A few hours of the training audio are CC BY (Koniwa, SIWIS); see [NOTICE](NOTICE). |
+| `soundfile` | 0.14.0 | BSD-3-Clause. Its wheels ship libsndfile, LGPL-2.1-or-later, loaded as a shared library. |
+| `yt-dlp` | 2026.10.26 | Unlicense. The PyPI wheel is Unlicense. The PyInstaller executables are not what this extra installs. |
+
+`kokoro` depends on `misaki[en]` (Apache-2.0). That extra also installs `phonemizer-fork` (GPL-3.0-or-later) and `espeakng-loader`, which does not declare a license and bundles the espeak-ng shared library (GPL-3.0-or-later). English narration tries espeak only as a fallback for out-of-dictionary words and continues without it. Commercial use of those GPL pieces is allowed; distributing a combined work that links them is under GPL-3. podcue does not vendor them. `num2words`, also pulled in for English, is LGPL. `torch` is BSD-3-Clause and `transformers` is Apache-2.0.
+
+The `moonshine` extra is separate and unchanged: its non-English models are non-commercial. The recap extra does not use Moonshine.
+
 ## Development
 
 ```sh
@@ -256,7 +356,15 @@ uv run pytest --ignore tests/test_smoke.py     # unit tests only
 uv run --extra moonshine pytest tests/test_smoke.py   # adds the Japanese Moonshine smoke case
 ```
 
+Unit tests do not install the `recap` extra. They stub Kokoro and the downloader. `build` and `fetch` still need ffmpeg only when those stubs are not in place.
+
 The smoke test synthesizes a short two-voice clip and runs the whole flow through the real CLI and models: start, cues, label-groups, start-summary, post-paragraph, set-summary, summary, check. It uses macOS `say` (and expects two groups) or `espeak-ng` (whose voices usually cluster as one). It skips with the reason when ffmpeg or a synthesizer is missing.
+
+## Releasing
+
+Bump `version` in `pyproject.toml` and `__version__` in `podcue/__init__.py` to the same value, then run `uv lock` so the lockfile matches. Merge that to `main`.
+
+Create a GitHub release tagged `v` plus that version, for example `v0.2.0`. Publishing the release runs [publish.yml](.github/workflows/publish.yml). It builds the sdist and wheel, checks that the built version matches the tag with a leading `v` removed, and publishes to PyPI with trusted publishing. The workflow stores no PyPI token. Running the workflow by hand (`workflow_dispatch`) publishes the selected commit the same way, without the tag check.
 
 ## License
 

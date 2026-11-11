@@ -112,6 +112,16 @@ def build_parser() -> Parser:
     check.add_argument("summary", help="a summary id, or a path to a .yaml/.json file")
 
     command("fetch-weights", "optional: download the pinned diarization weights now")
+
+    fetch = command("fetch", "download episode audio to a 16 kHz mono wav that start can take")
+    fetch.add_argument("url", help="direct audio URL, or a page URL yt-dlp can read (recap extra)")
+    fetch.add_argument("--out", default=".", metavar="DIR", help="directory for audio.wav (default: .)")
+
+    build = command("build", "narrate script.json, cut clips from the episode, and stitch one audio file")
+    build.add_argument("episodeId")
+    build.add_argument("script", help="script.json: {voice?, output?, segments:[...]}")
+    build.add_argument("--out", metavar="FILE",
+                       help="output audio (default: the script's output, else produced_summary.mp3)")
     return parser
 
 
@@ -284,6 +294,19 @@ def run_check(args, root):
     return result
 
 
+def run_fetch(args, _root):
+    from .fetch import fetch
+
+    return fetch(args.url, Path(args.out).expanduser())
+
+
+def run_build(args, root):
+    from .recap import build
+
+    episode = _episode(root, args.episodeId)
+    return build(episode, _ready(episode), Path(args.script), getattr(args, "out", None))
+
+
 def run_fetch_weights(_args, _root):
     from . import weights
 
@@ -305,11 +328,14 @@ COMMANDS = {
     "summary": run_summary,
     "check": run_check,
     "fetch-weights": run_fetch_weights,
+    "fetch": run_fetch,
+    "build": run_build,
 }
 
 
 def execute(argv: list[str]) -> tuple[dict, int]:
     from .pipeline import Rejected
+    from .recap import RecapError
     from .summary import Invalid
 
     episode_id = None
@@ -327,6 +353,8 @@ def execute(argv: list[str]) -> tuple[dict, int]:
         return {"kind": "error", "reason": error.reason, "message": str(error)}, 1
     except Invalid as error:
         return {"kind": "error", "message": str(error)}, 1
+    except RecapError as error:
+        return {"kind": "error", "message": str(error), **error.fields}, 1
     except KeyboardInterrupt:
         return {"kind": "error", "message": "interrupted"}, 130
     except Exception as error:  # one JSON line instead of a traceback

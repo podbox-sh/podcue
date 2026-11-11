@@ -1,0 +1,100 @@
+name: publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Artifact upload needs actions: write. The workflow grant above is contents only.
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - name: Build the sdist and wheel
+        run: |
+          uv build
+          rm -f dist/.gitignore
+      - name: Check the built version matches the release tag
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - << 'PY'
+          import os
+          import pathlib
+          import sys
+          import tarfile
+          import zipfile
+
+          tag = os.environ["RELEASE_TAG"]
+          if tag.startswith("v"):
+              tag = tag[1:]
+          dist = pathlib.Path("dist")
+          files = [path for path in dist.iterdir() if path.is_file() and not path.name.startswith(".")]
+          wheels = [path for path in files if path.suffix == ".whl"]
+          sdists = [path for path in files if path.name.endswith(".tar.gz")]
+          if len(wheels) != 1 or len(sdists) != 1:
+              found = ", ".join(path.name for path in files) or "(empty)"
+              sys.exit(f"expected one sdist and one wheel in dist/, found {found}")
+
+          def metadata_version(text, name):
+              for line in text.splitlines():
+                  if line.startswith("Version:"):
+                      return line.split(":", 1)[1].strip()
+              sys.exit(f"{name} metadata has no Version")
+
+          def wheel_version(path):
+              with zipfile.ZipFile(path) as archive:
+                  names = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+                  if len(names) != 1:
+                      sys.exit(f"{path.name} has no METADATA")
+                  text = archive.read(names[0]).decode()
+              return metadata_version(text, path.name)
+
+          def sdist_version(path):
+              with tarfile.open(path) as archive:
+                  members = [member for member in archive.getmembers() if member.name.endswith("/PKG-INFO")]
+                  if len(members) != 1:
+                      sys.exit(f"{path.name} has no PKG-INFO")
+                  extracted = archive.extractfile(members[0])
+                  if extracted is None:
+                      sys.exit(f"{path.name} has no PKG-INFO")
+                  text = extracted.read().decode()
+              return metadata_version(text, path.name)
+
+          built = ((wheels[0], wheel_version(wheels[0])), (sdists[0], sdist_version(sdists[0])))
+          for path, version in built:
+              if version != tag:
+                  sys.exit(f"{path.name} version {version} does not match release tag {tag}")
+          print(f"built version {tag} matches the release tag")
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/podcue
+    # id-token is the OIDC credential. actions: read lets this job download the dist artifact.
+    permissions:
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
