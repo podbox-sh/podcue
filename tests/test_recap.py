@@ -1,12 +1,15 @@
 """Recap fetch and build. Kokoro and yt-dlp are stubbed; the unit job does not install the extra."""
 
 import json
+import os
+import warnings
 from pathlib import Path
 
 import pytest
 from conftest import make_wav, run
 
 from podcue import __version__, audio
+from podcue.cli import main as cli_main
 from podcue.fetch import download_with_ytdlp, is_direct_media
 from podcue.recap import (
     RecapError,
@@ -23,7 +26,7 @@ from podcue.store import Episode
 
 
 def test_version_is_0_2_0():
-    assert __version__ == "0.2.2"
+    assert __version__ == "0.2.3"
 
 
 def test_importing_the_cli_does_not_load_the_recap_extra():
@@ -134,9 +137,37 @@ def test_length_warns_only_under_4s_or_over_45s_and_an_uncertain_cue_is_flagged(
     ]
     cover = clip_speakers(slipped, [], 0.0, 16.0)
     assert cover["speakers"] == 1
-    assert clip_flags(16.0, cover, slipped) == ["uncertain or mixed speaker in clip"]
+    assert clip_flags(16.0, cover, slipped) == ["uncertain, mixed, or undetermined speaker in clip"]
     mixed = [{"startMs": 0, "endMs": 12_000, "groupId": "gc0001", "speaker": "mixed", "text": "both"}]
-    assert clip_flags(12.0, clip_speakers(mixed, [], 0.0, 12.0), mixed) == ["uncertain or mixed speaker in clip"]
+    assert clip_flags(12.0, clip_speakers(mixed, [], 0.0, 12.0), mixed) == [
+        "uncertain, mixed, or undetermined speaker in clip"]
+    same_label = [
+        {"startMs": 0, "endMs": 8_000, "groupId": "gc0001", "speaker": "Ada", "text": "a"},
+        {"startMs": 8_000, "endMs": 16_000, "groupId": "gc0002", "speaker": "Ada", "text": "b"},
+    ]
+    assert clip_speakers(same_label, [], 0.0, 16.0)["speakers"] == 1
+    assert clip_flags(16.0, clip_speakers(same_label, [], 0.0, 16.0), same_label) == []
+    quotes = [
+        {"startMs": 0, "endMs": 3_000, "groupId": "gq1", "speaker": "quote", "text": "3"},
+        {"startMs": 3_000, "endMs": 6_000, "groupId": "gq2", "speaker": "quote", "text": "2"},
+        {"startMs": 6_000, "endMs": 9_000, "groupId": "gq3", "speaker": "quote", "text": "1"},
+    ]
+    assert clip_speakers(quotes, [], 0.0, 9.0)["speakers"] == 1
+    undetermined = [
+        {"startMs": 0, "endMs": 8_000, "groupId": "gc0001", "speaker": "Ada", "text": "guest"},
+        {"startMs": 8_000, "endMs": 8_400, "groupId": "gc0009", "speaker": "undetermined", "text": "um"},
+        {"startMs": 8_400, "endMs": 16_000, "groupId": "gc0001", "speaker": "Ada", "text": "guest"},
+    ]
+    quiet_blip = clip_speakers(undetermined, [], 0.0, 16.0)
+    assert quiet_blip["speakers"] == 1
+    assert clip_flags(16.0, quiet_blip, undetermined) == ["uncertain, mixed, or undetermined speaker in clip"]
+    old_file = [
+        {"startMs": 0, "endMs": 8_000, "groupId": "gc0001", "speaker": "gc0001", "text": "a"},
+        {"startMs": 8_000, "endMs": 8_300, "groupId": "gc0002", "speaker": "gc0002", "text": "b"},
+    ]
+    old_labels = [{"groupId": "gc0001", "label": "Ada"}, {"groupId": "gc0002", "label": "undetermined"}]
+    assert clip_flags(8.3, clip_speakers(old_file, old_labels, 0.0, 8.3), old_file, old_labels) == [
+        "uncertain, mixed, or undetermined speaker in clip"]
     same_person = [
         {"startMs": 0, "endMs": 8_000, "groupId": "gc0001", "speaker": "gc0001", "text": "a"},
         {"startMs": 8_000, "endMs": 16_000, "groupId": "gc0002", "speaker": "gc0002", "text": "b"},
@@ -157,8 +188,10 @@ def test_narrate_names_the_recap_extra_when_kokoro_is_absent(monkeypatch, tmp_pa
         return real(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", guarded)
+    monkeypatch.delenv("HF_HUB_VERBOSITY", raising=False)
     with pytest.raises(RecapError, match=rf"podcue\[recap\]=={__version__}"):
         narrate("Hello.", "am_michael", tmp_path / "out.wav")
+    assert os.environ["HF_HUB_VERBOSITY"] == "error"
 
 
 # commands
@@ -206,6 +239,32 @@ def audio_ops(monkeypatch):
 def write_script(path: Path, body: object) -> Path:
     path.write_text(json.dumps(body), encoding="utf-8")
     return path
+
+
+def test_build_silences_an_hf_token_warning(episode_id, audio_ops, tmp_path, capsys, monkeypatch):
+    import podcue.recap as recap
+
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HF_HUB_VERBOSITY", raising=False)
+    seen: dict[str, list[str]] = {}
+    stub = recap.narrate
+
+    def narrate(text, voice, dest):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.warn("HF_TOKEN is unset", UserWarning)
+            seen["caught"] = [str(item.message) for item in caught]
+        stub(text, voice, dest)
+
+    monkeypatch.setattr(recap, "narrate", narrate)
+    script = write_script(tmp_path / "script.json", {
+        "segments": [{"type": "narration", "text": "Intro."}],
+    })
+    code = cli_main(["build", episode_id, str(script), "--out", str(tmp_path / "out.mp3")])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert seen["caught"] == []
+    assert "HF_TOKEN" not in captured.out and "HF_TOKEN" not in captured.err
+    assert os.environ["HF_HUB_VERBOSITY"] == "error"
 
 
 def test_build_stitches_a_script_and_flags_a_second_speaker(episode_id, audio_ops, tmp_path, capsys):

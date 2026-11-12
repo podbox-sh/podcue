@@ -15,6 +15,9 @@ from .regions import Slice
 
 UNGROUPED = "ungrouped"
 UNCERTAIN = "uncertain"
+MIXED = "mixed"
+# A cue with one of these speakers keeps it when a group is labeled.
+HELD_SPEAKERS = (UNCERTAIN, MIXED)
 MAX_CUE_MS = 12_000  # a cue closes even when the transcriber left out punctuation
 SLIP_MS = 1_500  # a cue this short at a turn boundary does not join the surrounding speaker
 _CJK = {"ja", "zh", "ko"}

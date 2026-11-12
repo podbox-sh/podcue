@@ -178,6 +178,21 @@ def test_start_silences_an_hf_token_warning(engine, root, tmp_path, capsys, monk
     assert os.environ["HF_HUB_VERBOSITY"] == "error"
 
 
+def test_any_command_silences_the_hf_token_warning(capsys, monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HF_HUB_VERBOSITY", raising=False)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        code = cli_main(["nope"])
+        warnings.warn("HF_TOKEN is unset", UserWarning)
+        recorded = [str(item.message) for item in caught]
+    captured = capsys.readouterr()
+    assert code == 1
+    assert recorded == []
+    assert "HF_TOKEN" not in captured.out and "HF_TOKEN" not in captured.err
+    assert os.environ["HF_HUB_VERBOSITY"] == "error"
+
+
 def test_quiet_hub_keeps_a_verbosity_the_user_already_set(monkeypatch):
     monkeypatch.setenv("HF_HUB_VERBOSITY", "debug")
     transcribe.quiet_hub()

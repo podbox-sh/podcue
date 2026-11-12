@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import shutil
 import subprocess
 import sys
@@ -21,6 +20,7 @@ from pathlib import Path
 from . import __version__
 from .audio import is_url
 from .store import Episode, load_labels, write_text
+from .transcribe import quiet_hub
 
 # Mix rate. Kokoro's voices are 24 kHz, and every segment is resampled to match before the join.
 SAMPLE_RATE = 24_000
@@ -248,20 +248,33 @@ def snap(words: list[tuple[float, float, str]], start: float, end: float) -> tup
     return round(snapped_start, 2), round(snapped_end, 2), first, last
 
 
+FLAGGED_SPEAKERS = ("uncertain", "mixed", "undetermined")
+
+
+def voice_of(row: dict, labels: list[dict]) -> str:
+    """The name a clip compares. After label-groups this is the cue's `speaker`.
+
+    A cue that still carries its group id (no label yet, or a file from 0.2.2) uses the
+    group's label when there is one, so two groups with the same name stay one speaker.
+    """
+    by_group = {item["groupId"]: item["label"] for item in labels}
+    speaker = row.get("speaker") or row["groupId"]
+    if speaker in ("uncertain", "mixed"):
+        return speaker
+    if speaker == row["groupId"]:
+        return by_group.get(row["groupId"], speaker)
+    return speaker
+
+
 def speaker_cover(rows: list[dict], labels: list[dict], start: float, end: float) -> dict[str, float]:
-    """Seconds of each labeled voice inside `[start, end]`. An unlabeled group keeps its group id."""
-    names = {item["groupId"]: item["label"] for item in labels}
+    """Seconds of each voice inside `[start, end]`. The same label is one voice."""
     cover: dict[str, float] = {}
     for row in rows:
         overlap_start = max(row["startMs"] / 1000.0, start)
         overlap_end = min(row["endMs"] / 1000.0, end)
         if overlap_end <= overlap_start:
             continue
-        raw = row.get("speaker") or row["groupId"]
-        if raw in ("uncertain", "mixed"):
-            name = raw
-        else:
-            name = names.get(raw) or names.get(row["groupId"]) or raw
+        name = voice_of(row, labels)
         cover[name] = cover.get(name, 0.0) + (overlap_end - overlap_start)
     return cover
 
@@ -291,16 +304,19 @@ def clip_speakers(rows: list[dict], labels: list[dict], start: float, end: float
     return {"speakers": 1 + len(significant), "otherSeconds": round(other, 1), "dominant": dominant}
 
 
-def clip_flags(length: float, speakers: dict, cues: list[dict] | None = None) -> list[str]:
+def clip_flags(length: float, speakers: dict, cues: list[dict] | None = None,
+               labels: list[dict] | None = None) -> list[str]:
     """Flags for one clip. Length is a warning only under 4 s or over 45 s.
 
-    Speaker identity is each cue's `speaker` (an uncertain or mixed cue counts even when it
-    shares a group id). A second voice still has to cover 1 s and 8% of the clip.
+    Voices are compared by `speaker` (the group label once `label-groups` has run). Two cues
+    with the same label are one speaker. `uncertain`, `mixed`, and `undetermined` are flagged
+    even when that cue is shorter than the 1 s / 8% second-voice rule.
     """
     flags = []
     present = cues or []
-    if any((cue.get("speaker") or cue.get("groupId")) in ("uncertain", "mixed") for cue in present):
-        flags.append("uncertain or mixed speaker in clip")
+    names = labels or []
+    if any(voice_of(cue, names) in FLAGGED_SPEAKERS for cue in present):
+        flags.append("uncertain, mixed, or undetermined speaker in clip")
     count = speakers["speakers"]
     if count == 0:
         flags.append("no speech in clip")
@@ -412,8 +428,8 @@ def _samples(audio: object):
 def narrate(text: str, voice: str, dest: Path) -> None:
     """Synthesize `text` with Kokoro at 24 kHz into `dest`. The pipeline is kept for the process."""
     global _pipeline
-    # Hugging Face counts toolkit usage unless this is set. Leave a value the user set alone.
-    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    # Kokoro imports huggingface_hub. The token warning is read at that import.
+    quiet_hub()
     # Imported here so `import podcue.recap` works without the recap extra (Kokoro pulls torch).
     try:
         import numpy as np
@@ -561,7 +577,7 @@ def render_report(episode_id: str, source: Path, dest: Path, duration_s: float, 
         f"- Flags: {len(flags)}",
         "",
         "Clip edges are the cue word times the requested range snapped to. "
-        "A clip under 4 seconds or over 45 seconds is flagged, as is an uncertain or mixed cue.",
+        "A clip under 4 seconds or over 45 seconds is flagged, as is an uncertain, mixed, or undetermined cue.",
         "",
         "| # | type | speaker | voice | range | length | LUFS in→out | flags |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -641,7 +657,7 @@ def build(episode: Episode, rows: list[dict], script_path: Path, out_flag: str |
                 row for row in rows
                 if row["endMs"] / 1000.0 > start and row["startMs"] / 1000.0 < end
             ]
-            flags = clip_flags(length, speakers, overlapping)
+            flags = clip_flags(length, speakers, overlapping, labels)
             log(f"clip {index} {fmt_ts(start)}–{fmt_ts(end)} ({length}s)")
             stat = source.stat()
             raw = cache / (
