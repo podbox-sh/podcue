@@ -23,6 +23,7 @@ from pathlib import Path
 
 from . import __version__
 from .audio import is_url
+from .numbers import say_numbers
 from .store import Episode, load_labels, write_text
 from .transcribe import quiet_hub
 from .weights import Pin, ensure
@@ -550,8 +551,9 @@ def narrate(text: str, voice: str, dest: Path) -> None:
     if _pipeline is None:
         log(f"loading Kokoro voice {voice}")
         _pipeline = KPipeline(lang_code="a", repo_id=KOKORO_REPO, device="cpu")
+    spoken = say_numbers(text.strip())
     pieces = []
-    for result in _pipeline(text.strip(), voice=voice, split_pattern=r"\n+"):
+    for result in _pipeline(spoken, voice=voice, split_pattern=r"\n+"):
         audio = result[2]
         if audio is None:
             continue
@@ -774,9 +776,10 @@ def build(episode: Episode, rows: list[dict], script_path: Path, out_flag: str |
         if kind == "narration":
             voice = resolve_voice(script.voice, script.voice_preset, segment, index)
             text = segment["text"].strip()
+            spoken = say_numbers(text)
             log(f"narration {index} ({voice})")
-            raw = cache / f"tts_{digest('tts', voice, text)}.wav"
-            _ensure(raw, lambda target, text=text, voice=voice: narrate(text, voice, target))
+            raw = cache / f"tts_{digest('tts', voice, spoken)}.wav"
+            _ensure(raw, lambda target, text=spoken, voice=voice: narrate(text, voice, target))
             row = {"index": index, "type": "narration", "text": text, "voice": voice, "flags": []}
         elif kind == "clip":
             requested_start = parse_ts(segment["start"])
