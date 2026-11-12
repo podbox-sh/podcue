@@ -11,6 +11,7 @@ Not tagged and not published. The package metadata is `0.2.5`.
 - `start` records `asr` on the episode: faster-whisper with its pinned model and revision, Moonshine with arch `tiny` or `base`, or `external` for `--transcript`.
 - Cue text joins number punctuation without a stray space (`400,000`, `2.4%`). A snapped clip stays inside its cues and does not overlap an adjacent cue of another speaker.
 - `label-groups` accepts `"scope": "cues"` on a range. That sets `speaker` on the cues in the window and leaves the group's other cues alone. Later entries still win. `uncertain` and `mixed` are never relabeled.
+- English narration reads numerals as words before Kokoro (`400,000` as "four hundred thousand", `2.4%` as "two point four percent", `$1.5 billion` as "one point five billion dollars", years, ordinals, `10x`, negatives, ranges, and times). Cue text and transcripts keep their digits. Other languages are unchanged.
 
 ## 0.2.4
 

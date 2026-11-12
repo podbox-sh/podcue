@@ -70,7 +70,8 @@ misaki 0.9.4, extra `en` (grapheme-to-phoneme, required by kokoro)
     The loader's package metadata declares no license. It redistributes the
     espeak-ng shared library, which is GPL-3.0-or-later:
     https://github.com/espeak-ng/espeak-ng/blob/master/COPYING
-  num2words (LGPL), https://github.com/savoirfairelinux/num2words
+  num2words 0.5.14 (LGPL), https://github.com/savoirfairelinux/num2words
+  podcue calls it to read numerals in English narration. Cue text is not changed.
   English narration tries espeak only for out-of-dictionary words and continues
   if that fallback does not load.
   torch (BSD-3-Clause) and transformers (Apache-2.0) are pulled in by kokoro.

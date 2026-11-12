@@ -1420,12 +1420,14 @@ recap = [
     { name = "ctranslate2" },
     { name = "faster-whisper" },
     { name = "kokoro", marker = "python_full_version < '3.13'" },
+    { name = "num2words" },
     { name = "soundfile" },
     { name = "yt-dlp" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "num2words" },
     { name = "pytest" },
 ]
 
@@ -1437,6 +1439,7 @@ requires-dist = [
     { name = "faster-whisper", marker = "extra == 'recap'", specifier = "==1.2.1" },
     { name = "kokoro", marker = "python_full_version < '3.13' and extra == 'recap'", specifier = "==0.9.4" },
     { name = "moonshine-voice", marker = "extra == 'moonshine'", specifier = "==0.1.5" },
+    { name = "num2words", marker = "extra == 'recap'", specifier = "==0.5.14" },
     { name = "numpy", specifier = "==2.5.4" },
     { name = "onnxruntime", specifier = "==1.31.0" },
     { name = "platformdirs", specifier = "==4.14.5" },
@@ -1447,7 +1450,10 @@ requires-dist = [
 provides-extras = ["asr", "moonshine", "recap"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.2.0" }]
+dev = [
+    { name = "num2words", specifier = "==0.5.14" },
+    { name = "pytest", specifier = ">=9.2.0" },
+]
 
 [[package]]
 name = "preshed"

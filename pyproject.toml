@@ -28,6 +28,7 @@ recap = [
   "kokoro==0.9.4; python_version < '3.13'",
   "soundfile==0.14.0",
   "yt-dlp==2026.10.26",
+  "num2words==0.5.14",
 ]
 
 [project.scripts]
@@ -39,5 +40,6 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "num2words==0.5.14",
     "pytest>=9.2.0",
 ]
