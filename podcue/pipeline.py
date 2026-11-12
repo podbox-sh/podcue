@@ -169,5 +169,5 @@ def start(source: str, language: str, root: Path, transcript_words=None, fresh: 
         finally:
             episode.status.unlink(missing_ok=True)
     finally:
-        release(fd)
+        release(fd, episode.start_lock)
     return episode, True

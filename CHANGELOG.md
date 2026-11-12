@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.6
+
+Not tagged and not published. The package metadata is `0.2.6`.
+
+- `build` writes Kokoro narration as 16-bit WAV before the loudness pass. The previous `.raw` file has no soundfile subtype, so the first narration failed with "No default subtype for major format 'raw'".
+- `start.lock` and `write.lock` are removed when the command finishes, including when it fails. A crash can leave the file. The OS has released the flock, and the next command takes it and removes it when it finishes.
+- Torch warnings Kokoro still emits during `build` are ignored, including ones reported against Kokoro rather than the torch module. The same filter runs at the start of every command.
+- CI job `stability` runs `.cursor/skills/verify-podcue/drive.py`: the wheel is installed with `uvx --python 3.12`, then `start` (Whisper small.en), cues, label-groups, a Kokoro build, and `start --fresh` on a 75-second public-domain speech clip.
+
 ## 0.2.5
 
 Not tagged and not published. The package metadata is `0.2.5`.
