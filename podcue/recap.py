@@ -2,7 +2,7 @@
 
 `script.json` is the plan `podcue build` reads. A clip's `start` and `end` are seconds or
 `[h:]mm:ss[.s]`. Each edge snaps to a word time spread across the cue that contains it, the same
-way a 10–20 s clip covers two or three cues of at most 12 s. Kokoro, soundfile, and yt-dlp stay
+way a clip of a few cues covers consecutive lines of at most 12 s. Kokoro, soundfile, and yt-dlp stay
 in the `recap` extra and are imported only when a narration or a page download needs them.
 """
 
@@ -39,8 +39,8 @@ VOICE_ALIASES = {
 # A second voice counts when it covers this much of the clip. A short interjection does not.
 OTHER_MIN_S = 1.0
 OTHER_MIN_FRAC = 0.08
-CLIP_MIN_S = 10.0
-CLIP_MAX_S = 20.0
+CLIP_WARN_UNDER_S = 4.0
+CLIP_WARN_OVER_S = 45.0
 KOKORO_REPO = "hexgrad/Kokoro-82M"
 
 SCRIPT_SHAPE = (
@@ -257,7 +257,11 @@ def speaker_cover(rows: list[dict], labels: list[dict], start: float, end: float
         overlap_end = min(row["endMs"] / 1000.0, end)
         if overlap_end <= overlap_start:
             continue
-        name = names.get(row["groupId"]) or row["groupId"]
+        raw = row.get("speaker") or row["groupId"]
+        if raw in ("uncertain", "mixed"):
+            name = raw
+        else:
+            name = names.get(raw) or names.get(row["groupId"]) or raw
         cover[name] = cover.get(name, 0.0) + (overlap_end - overlap_start)
     return cover
 
@@ -287,15 +291,25 @@ def clip_speakers(rows: list[dict], labels: list[dict], start: float, end: float
     return {"speakers": 1 + len(significant), "otherSeconds": round(other, 1), "dominant": dominant}
 
 
-def clip_flags(length: float, speakers: dict) -> list[str]:
+def clip_flags(length: float, speakers: dict, cues: list[dict] | None = None) -> list[str]:
+    """Flags for one clip. Length is a warning only under 4 s or over 45 s.
+
+    Speaker identity is each cue's `speaker` (an uncertain or mixed cue counts even when it
+    shares a group id). A second voice still has to cover 1 s and 8% of the clip.
+    """
     flags = []
+    present = cues or []
+    if any((cue.get("speaker") or cue.get("groupId")) in ("uncertain", "mixed") for cue in present):
+        flags.append("uncertain or mixed speaker in clip")
     count = speakers["speakers"]
     if count == 0:
         flags.append("no speech in clip")
     elif count > 1:
         flags.append(f"{count} speakers in clip (other speaker {speakers['otherSeconds']}s)")
-    if not CLIP_MIN_S <= length <= CLIP_MAX_S:
-        flags.append(f"length {length}s outside 10-20s")
+    if length < CLIP_WARN_UNDER_S:
+        flags.append(f"length {length}s under 4s")
+    elif length > CLIP_WARN_OVER_S:
+        flags.append(f"length {length}s over 45s")
     return flags
 
 
@@ -547,7 +561,7 @@ def render_report(episode_id: str, source: Path, dest: Path, duration_s: float, 
         f"- Flags: {len(flags)}",
         "",
         "Clip edges are the cue word times the requested range snapped to. "
-        "Speaker flags use the episode's group labels. A clip outside 10–20 seconds is flagged.",
+        "A clip under 4 seconds or over 45 seconds is flagged, as is an uncertain or mixed cue.",
         "",
         "| # | type | speaker | voice | range | length | LUFS in→out | flags |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -623,7 +637,11 @@ def build(episode: Episode, rows: list[dict], script_path: Path, out_flag: str |
             length = round(end - start, 1)
             text = "".join(word[2] for word in words[first:last + 1]).strip()
             speakers = clip_speakers(rows, labels, start, end)
-            flags = clip_flags(length, speakers)
+            overlapping = [
+                row for row in rows
+                if row["endMs"] / 1000.0 > start and row["startMs"] / 1000.0 < end
+            ]
+            flags = clip_flags(length, speakers, overlapping)
             log(f"clip {index} {fmt_ts(start)}–{fmt_ts(end)} ({length}s)")
             stat = source.stat()
             raw = cache / (

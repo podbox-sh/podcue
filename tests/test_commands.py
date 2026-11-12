@@ -17,7 +17,9 @@ def ids(rows):
 def test_cues_pages_fifty_by_default_and_continues_after_a_cue(episode_id, capsys):
     page, code = run(capsys, "cues", episode_id)
     assert code == 0 and page["state"] == "present" and ids(page["cues"]) == [f"c{i:04d}" for i in range(1, 51)]
-    assert set(page["cues"][0]) == {"id", "startMs", "endMs", "text", "groupId", "nearestGroupId", "nearestCosine"}
+    assert set(page["cues"][0]) == {
+        "id", "startMs", "endMs", "text", "groupId", "speaker", "nearestGroupId", "nearestCosine",
+    }
     assert "hostNames" not in page
     page, _ = run(capsys, "cues", episode_id, "--after", "c0050")
     assert ids(page["cues"])[0] == "c0051" and len(page["cues"]) == 50
@@ -67,20 +69,27 @@ def test_cues_hosts_lists_person_names_only(episode_id, capsys):
 def test_label_groups_merges_and_reports_labeled_share(episode_id, root, capsys):
     result, code = run(capsys, "label-groups", episode_id, '[{"groupId": "gc0002", "label": "Ben"}]')
     assert code == 0 and result == {"state": "present", "episodeId": episode_id,
-                                    "labels": [{"groupId": "gc0002", "label": "Ben"}], "labeledShare": 0.3333}
+                                    "labels": [{"groupId": "gc0002", "label": "Ben"}],
+                                    "labeledShare": 0.3333, "undeterminedShare": 0.0}
     result, _ = run(capsys, "label-groups", episode_id, '[{"groupId": "gc0001", "label": "Ana"}]')
     assert result["labels"] == [{"groupId": "gc0001", "label": "Ana"}, {"groupId": "gc0002", "label": "Ben"}]
-    assert result["labeledShare"] == 0.6667
+    assert result["labeledShare"] == 0.6667 and result["undeterminedShare"] == 0.0
     result, _ = run(capsys, "label-groups", episode_id,
                     '[{"groupId": "gc0002", "label": "undetermined"}, {"groupId": "ungrouped", "label": "ending"}]')
     assert result["labels"][1:] == [{"groupId": "gc0002", "label": "undetermined"},
                                     {"groupId": "ungrouped", "label": "ending"}]
-    assert result["labeledShare"] == 0.6667
+    # `ending` and `undetermined` are not speaker names. Only Ana's third of the cue time counts.
+    assert result["labeledShare"] == 0.3333 and result["undeterminedShare"] == 0.3333
     stored = json.loads(Episode(root.resolve(), episode_id).labels.read_text())
     assert stored == {"groups": result["labels"]}
     view, _ = run(capsys, "episode", episode_id)
     assert [g["label"] for g in view["groups"]] == ["Ana", "undetermined", "ending"]
-    assert view["labeledShare"] == 0.6667
+    assert view["labeledShare"] == 0.3333 and view["undeterminedShare"] == 0.3333
+
+
+def test_quote_does_not_count_as_a_labeled_speaker(episode_id, capsys):
+    result, code = run(capsys, "label-groups", episode_id, '[{"groupId": "gc0001", "label": "quote"}]')
+    assert code == 0 and result["labeledShare"] == 0.0 and result["undeterminedShare"] == 0.0
 
 
 @pytest.mark.parametrize("body", ['{"groupId": "gc0001", "label": "A"}', '[{"groupId": "gc0001", "label": ""}]',

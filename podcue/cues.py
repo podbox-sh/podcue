@@ -14,7 +14,9 @@ from .diarize import Tracks, Turn
 from .regions import Slice
 
 UNGROUPED = "ungrouped"
+UNCERTAIN = "uncertain"
 MAX_CUE_MS = 12_000  # a cue closes even when the transcriber left out punctuation
+SLIP_MS = 1_500  # a cue this short at a turn boundary does not join the surrounding speaker
 _CJK = {"ja", "zh", "ko"}
 _LATIN_END = re.compile(r"[.!?]$")
 _CJK_END = re.compile(r"[.!?。！？]$")  # ja, zh, and ko also close on 。！？
@@ -111,12 +113,51 @@ def cosine(left: list[float], right: list[float]) -> float:
     return 0.0 if norm == 0 else dot / norm
 
 
+def _touching_speakers(turns: list[Turn], start_ms: int, end_ms: int) -> set[int]:
+    found: set[int] = set()
+    for turn in turns:
+        if min(end_ms, turn.end_ms) - max(start_ms, turn.start_ms) > 0:
+            found.add(turn.speaker)
+    return found
+
+
+def settle_boundary_slips(rows: list[dict], turns: list[Turn]) -> None:
+    """Move a short cue off a neighbor's group when another voice's turn is inside it.
+
+    The cue is under 1.5 s, the cues on both sides share one group, and this cue was given that
+    same group. If a different diarization speaker also overlaps the cue, it stays `uncertain`
+    instead of counting as that neighbor.
+    """
+    if len(rows) < 3:
+        return
+    for index in range(1, len(rows) - 1):
+        row = rows[index]
+        if row["endMs"] - row["startMs"] >= SLIP_MS:
+            continue
+        left, right = rows[index - 1], rows[index + 1]
+        if left["groupId"] != right["groupId"] or row["groupId"] != left["groupId"]:
+            continue
+        if left["groupId"] in (UNGROUPED, UNCERTAIN):
+            continue
+        neighbor = overlapping_speaker(turns, left["startMs"], left["endMs"])
+        if neighbor is None:
+            continue
+        others = _touching_speakers(turns, row["startMs"], row["endMs"]) - {neighbor}
+        if not others:
+            continue
+        row["groupId"] = UNCERTAIN
+        row["speaker"] = UNCERTAIN
+        row["nearestGroupId"] = None
+        row["nearestCosine"] = None
+
+
 def cue_rows(cues: list[Cue], tracks: Tracks) -> list[dict]:
     """The `cues.json` rows. A voice's group id is `g` + its first cue id; no voice is `ungrouped`.
 
     `nearestGroupId`/`nearestCosine` name the other group whose ECAPA centroid is most similar to
-    this cue's group. Ties go to the smaller group id. Both are null for `ungrouped` and when
-    there is only one group.
+    this cue's group. Ties go to the smaller group id. Both are null for `ungrouped`, `uncertain`,
+    and when there is only one group. A cue under 1.5 s between one speaker, with another voice's
+    turn inside it, is `uncertain` instead of that neighbor's group.
     """
     speakers = [overlapping_speaker(tracks.turns, cue.start_ms, cue.end_ms) for cue in cues]
     group_of: dict[int, str] = {}
@@ -145,9 +186,11 @@ def cue_rows(cues: list[Cue], tracks: Tracks) -> list[dict]:
             "endMs": cue.end_ms,
             "text": cue.text,
             "groupId": group_id,
+            "speaker": group_id,
             "nearestGroupId": near_id,
             "nearestCosine": near_score,
         })
+    settle_boundary_slips(rows, tracks.turns)
     return rows
 
 

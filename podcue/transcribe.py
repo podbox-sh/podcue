@@ -5,8 +5,11 @@ Both engines are imported only when a built-in transcription actually runs.
 
 from __future__ import annotations
 
+import logging
 import math
 import os
+import sys
+import warnings
 from typing import Protocol
 
 import numpy as np
@@ -28,6 +31,22 @@ ASR_MISSING = (
     "Run: uvx --from 'podcue[asr]' podcue start <audio> "
     "or pass --transcript with timed words from your own model."
 )
+
+
+def quiet_hub() -> None:
+    """Public pinned downloads do not need a Hugging Face token.
+
+    huggingface_hub warns when `HF_TOKEN` is unset. Podcue never sends one. The verbosity
+    variable is read when that library is imported, so it is set before the import.
+    """
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+    os.environ.setdefault("HF_HUB_VERBOSITY", "error")
+    warnings.filterwarnings("ignore", message=r".*HF_TOKEN.*")
+    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+    hub_logging = sys.modules.get("huggingface_hub.utils.logging")
+    if hub_logging is not None and hasattr(hub_logging, "set_verbosity_error"):
+        hub_logging.set_verbosity_error()
 
 
 class Transcriber(Protocol):
@@ -77,6 +96,7 @@ class NeedleTranscriber:
         # Off by default here; a value the caller set is left alone. Imported only when
         # built-in transcription runs, not when podcue itself is imported.
         os.environ.setdefault("CACTUS_TELEMETRY", "0")
+        quiet_hub()
         try:
             import cactus
         except ModuleNotFoundError as error:
