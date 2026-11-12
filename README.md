@@ -33,11 +33,11 @@ Each write is validated when it's made, so there is no fix loop. `podcue check` 
 `fetch` and `build` need the `recap` extra. `start`, `cues`, and `label-groups` are unchanged; installing the extra is enough to run the whole recap, because the extra is a superset of the base package.
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.3" podcue fetch https://example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.3" podcue start ./ep/audio.wav
-uvx --python 3.12 --from "podcue[recap]==0.2.3" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
-uvx --python 3.12 --from "podcue[recap]==0.2.3" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
-uvx --python 3.12 --from "podcue[recap]==0.2.3" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue fetch https://example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue start ./ep/audio.wav
+uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
+uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
+uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 Pass `--python 3.12`. Kokoro 0.9.4 declares `Requires-Python: <3.13`. A direct media URL downloads without yt-dlp; a page URL needs it, from the same extra. Plain `uvx podcue` does not install the extra, so transcription stays light.
@@ -211,8 +211,8 @@ It fails, listing every problem, when:
 ### `podcue fetch <URL> [--out DIR]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.3" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.3" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
 ```
 
 ```json
@@ -227,7 +227,7 @@ uvx --python 3.12 --from "podcue[recap]==0.2.3" podcue fetch https://www.youtube
 ### `podcue build <episodeId> <script.json> [--out FILE]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.3" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 ```json
@@ -397,7 +397,9 @@ Bump `version` in `pyproject.toml` and `__version__` in `podcue/__init__.py` to 
 
 Create a GitHub release tagged `v` plus that version, for example `v0.2.1`. Publishing the release runs [publish.yml](.github/workflows/publish.yml). It builds the sdist and wheel, checks that the built version matches the tag with a leading `v` removed, and publishes to PyPI with trusted publishing. The workflow stores no PyPI token. Running the workflow by hand (`workflow_dispatch`) publishes the selected commit the same way, without the tag check.
 
-0.2.3 is released. This branch keeps that version and switches built-in ASR for `en de fr es it nl pl` from cactus-compute Whistle to Whisper small (faster-whisper). It is not a new tag. See [CHANGELOG.md](CHANGELOG.md).
+0.2.4 is the package version on this branch. It is not tagged and not published. See [CHANGELOG.md](CHANGELOG.md). Built-in ASR for `en de fr es it nl pl` is Whisper small (faster-whisper). `ja`, `ko`, and `zh` stay on Moonshine.
+
+0.2.3, which is released, writes each cue's `speaker` from its group label and lets `label-groups` name every group that sits inside a cue range.
 
 0.2.2 flags clip length only under 4 seconds or over 45 seconds. A short cue at a speaker boundary can be `uncertain`. `labeledShare` counts person names only, and `undeterminedShare` is reported beside it. `createdAt` is the UTC time of the start that wrote the cues.
 
