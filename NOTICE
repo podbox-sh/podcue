@@ -20,21 +20,20 @@ pyannote segmentation-3.0 (segmentation.onnx)
   https://huggingface.co/onnx-community/pyannote-segmentation-3.0
   License: MIT.
 
-cactus-compute 4.1.0 (speech-to-text for en de fr es it nl pl; optional `asr` extra)
-  https://github.com/cactus-compute/cactus
-  License: Apache-2.0.
+faster-whisper 1.2.1 and CTranslate2 4.9.0 (speech-to-text for en de fr es it nl pl; optional `asr` extra)
+  https://github.com/SYSTRAN/faster-whisper
+  https://github.com/OpenNMT/CTranslate2
+  License: MIT.
   Also installed by the `recap` extra. Not imported unless a start actually transcribes.
-  The package downloads the Needle engine and Whistle weights from pinned commits,
-  and checks them against the SHA-256 values it ships. It does not fetch those
-  files from the moving `main` revision.
-  Engine: https://huggingface.co/Cactus-Compute/cactus
-    revision 4e822c9036be2eb0e47ef556df32a818bb1572ef
-  Whistle weights: https://huggingface.co/Cactus-Compute/whistle
-    revision 741118687e1f008f06d1351a402a731274789790
-  It depends on Pillow (HPND).
-  podcue turns its usage telemetry off (CACTUS_TELEMETRY=0) unless the user
-  has set CACTUS_TELEMETRY. CI also disables it, because the package skips
-  telemetry when CI is set.
+  Weights are OpenAI Whisper small, converted by Systran (MIT), downloaded from a pinned
+  commit and checked against the SHA-256 of model.bin. They are not fetched from a branch.
+  English: https://huggingface.co/Systran/faster-whisper-small.en
+    revision d1d751a5f8271d482d14ca55d9e2deeebbae577f
+    model.bin 483545366 bytes, sha256 62b2a45b05ee59acb4a5341b33ee35e041395d378d418a18acfe4c9e768ee37a
+  de fr es it nl pl: https://huggingface.co/Systran/faster-whisper-small
+    revision 536b0662742c02347bc0e980a01041f333bce120
+    model.bin 483546902 bytes, sha256 3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671
+  Inference is CPU int8. Podcue does not send a Hugging Face token.
 
 Moonshine (ja, ko, zh only; optional `moonshine` extra)
   Downloaded by the moonshine-voice package. The non-English Moonshine models are

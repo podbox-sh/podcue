@@ -10,8 +10,8 @@ podcue is a local-only command line tool. Every command runs in the foreground, 
 - `ffmpeg` on `PATH`.
 - macOS or Linux (the episode lock uses `flock`).
 - Network access on the first `start`, to download the diarization weights and, with the `asr` extra, the pinned speech model. The first narration also downloads Kokoro weights.
-- The `asr` extra (`cactus-compute` 4.1.0) for built-in speech-to-text in `en de fr es it nl pl`. Without it, pass `--transcript`. `ja ko zh` still need the `moonshine` extra.
-- The `recap` extra for `fetch` of a page and for `build`: `kokoro`, `soundfile`, and `yt-dlp`, plus `cactus-compute` so a recap install can still `start`. Kokoro 0.9.4 narrates on Python 3.12.
+- The `asr` extra (faster-whisper) for built-in speech-to-text: Whisper `small.en` for `en`, and multilingual Whisper `small` for `de fr es it nl pl`. Without it, pass `--transcript`. `ja ko zh` still need the `moonshine` extra.
+- The `recap` extra for `fetch` of a page and for `build`: `kokoro`, `soundfile`, and `yt-dlp`, plus faster-whisper so a recap install can still `start`. Kokoro 0.9.4 narrates on Python 3.12.
 
 ## Agent workflow
 
@@ -74,7 +74,7 @@ uvx podcue start ep12.mp3 --transcript transcript.json
 - Idempotent: when the folder already has `cues.json`, `start` returns it with `"created": false` and loads no model. `--language` is then ignored, and the episode keeps its first language.
 - A start that failed or was interrupted is rerun by the next `start` of the same audio.
 - A second `start` of the same episode while one is running exits 1 with `"reason": "running"`.
-- `--language`, for built-in ASR, is one of `en de fr es it nl pl` (`cactus-compute`, the `asr` extra), or `ja ko zh` (Moonshine, from the `moonshine` extra). The default is `en`. **`ja`, `ko` and `zh` are experimental.** In testing, Moonshine dropped the opening greeting 「こんにちは。」 of a Japanese clip and returned the rest as one cue without word times.
+- `--language`, for built-in ASR, is `en` (Whisper `small.en`), `de fr es it nl pl` (Whisper `small`), from the `asr` extra, or `ja ko zh` (Moonshine, from the `moonshine` extra). The default is `en`. **`ja`, `ko` and `zh` are experimental.** In testing, Moonshine dropped the opening greeting 「こんにちは。」 of a Japanese clip and returned the rest as one cue without word times.
 - `--transcript FILE` skips built-in ASR. Diarization and cue building still run. The schema is below.
 
 #### `--transcript` file
@@ -345,7 +345,7 @@ paragraphs:
 
 podcue runs locally. It uses the network only to download the input when you pass a URL to `start` or `fetch`, to download diarization weights on first use, and, with the recap extra, to download Kokoro weights the first time a narration is built. `fetch` of a page also uses the network through yt-dlp. Each direct download has a 60-second connect/read timeout, so a stalled connection fails instead of hanging.
 
-cactus-compute counts anonymous usage by default. **podcue turns that off** by setting `CACTUS_TELEMETRY=0` in its own process when `CACTUS_TELEMETRY` is unset. If you set `CACTUS_TELEMETRY` yourself, podcue leaves it alone. The same for Hugging Face: `HF_HUB_DISABLE_TELEMETRY=1` unless you have set it. Podcue does not need `HF_TOKEN`. Every command calls the same `quiet_hub` helper before it does any work, and narration calls it again immediately before Kokoro imports `huggingface_hub`. That sets the hub log level to error unless you already set `HF_HUB_VERBOSITY`, and it ignores a missing-token warning. The downloads are public commits pinned by cactus-compute and by the diarization weight checksums.
+Podcue does not need `HF_TOKEN`. Every command calls the same `quiet_hub` helper before it does any work, narration calls it again immediately before Kokoro imports `huggingface_hub`, and built-in Whisper calls it before faster-whisper downloads weights. That sets `HF_HUB_DISABLE_TELEMETRY=1` unless you have set it, sets the hub log level to error unless you already set `HF_HUB_VERBOSITY`, and ignores a missing-token warning. Whisper and the diarization weights are public commits, pinned by revision, and the Whisper `model.bin` is checked against a SHA-256.
 
 ## Weights and licenses
 
@@ -358,7 +358,7 @@ On first use podcue downloads two pinned ONNX files into the user cache director
 
 - **ECAPA:** an ECAPA-TDNN512 trained with [WeSpeaker](https://github.com/wenet-e2e/wespeaker) (Apache-2.0 code) on VoxCeleb. Credit for the CC BY 4.0 weights goes to VoxCeleb (Nagrani, Chung, Xie, Zisserman), https://www.robots.ox.ac.uk/~vgg/data/voxceleb/. The model card has no license field. WeSpeaker says pretrained models follow the license of their training data, so the CC BY 4.0 attribution travels with the file.
 - **Segmentation:** pyannote segmentation-3.0 powerset model, MIT license.
-- **Speech-to-text (`en de fr es it nl pl`):** [cactus-compute](https://github.com/cactus-compute/cactus) 4.1.0, the `asr` extra, licensed [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0). It installs the Needle engine and Whistle weights from pinned commit SHAs (not the moving `main` branch): engine `Cactus-Compute/cactus` @ `4e822c9036be2eb0e47ef556df32a818bb1572ef`, Whistle weights `Cactus-Compute/whistle` @ `741118687e1f008f06d1351a402a731274789790`. Each download is checked against the checksums shipped in that package. `podcue[recap]` includes this extra.
+- **Speech-to-text (`en de fr es it nl pl`):** [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 1.2.1 with [CTranslate2](https://github.com/OpenNMT/CTranslate2) 4.9.0, the `asr` extra. Both are MIT. English uses `Systran/faster-whisper-small.en` at `d1d751a5f8271d482d14ca55d9e2deeebbae577f` (`model.bin` 483,545,366 bytes, sha256 `62b2a45b05ee59acb4a5341b33ee35e041395d378d418a18acfe4c9e768ee37a`). German, French, Spanish, Italian, Dutch and Polish use `Systran/faster-whisper-small` at `536b0662742c02347bc0e980a01041f333bce120` (`model.bin` 483,546,902 bytes, sha256 `3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671`). Those are OpenAI Whisper small weights converted by Systran, MIT, run on CPU at int8. `podcue[recap]` includes this extra. `ja ko zh` stay on Moonshine.
 - **Moonshine (`ja ko zh` only):** moonshine-voice 0.1.5, from the `moonshine` extra, downloads the model into `<cache>/moonshine` and verifies it against its own CRC32C catalog. The non-English Moonshine models are under the non-commercial [Moonshine Community License](https://www.moonshine.ai/license). Those terms apply only when you run with `--language ja|ko|zh`. No other language is routed to Moonshine.
 
 The weights are not part of this package and are not covered by its MIT license. See [NOTICE](NOTICE).
@@ -397,7 +397,7 @@ Bump `version` in `pyproject.toml` and `__version__` in `podcue/__init__.py` to 
 
 Create a GitHub release tagged `v` plus that version, for example `v0.2.1`. Publishing the release runs [publish.yml](.github/workflows/publish.yml). It builds the sdist and wheel, checks that the built version matches the tag with a leading `v` removed, and publishes to PyPI with trusted publishing. The workflow stores no PyPI token. Running the workflow by hand (`workflow_dispatch`) publishes the selected commit the same way, without the tag check.
 
-0.2.3 is the package version on this branch. It is not tagged and not published. See [CHANGELOG.md](CHANGELOG.md). After `label-groups`, a cue's `speaker` is the group's label, and `build` compares those labels. A cue range can label every group that sits entirely inside it. The Hugging Face missing-token warning is silenced for every command.
+0.2.3 is released. This branch keeps that version and switches built-in ASR for `en de fr es it nl pl` from cactus-compute Whistle to Whisper small (faster-whisper). It is not a new tag. See [CHANGELOG.md](CHANGELOG.md).
 
 0.2.2 flags clip length only under 4 seconds or over 45 seconds. A short cue at a speaker boundary can be `uncertain`. `labeledShare` counts person names only, and `undeterminedShare` is reported beside it. `createdAt` is the UTC time of the start that wrote the cues.
 
