@@ -385,11 +385,12 @@ COMMANDS = {
 
 def execute(argv: list[str]) -> tuple[dict, int]:
     from .pipeline import Rejected
-    from .recap import RecapError
+    from .recap import RecapError, quiet_torch
     from .summary import Invalid
 
-    # One call covers every command, including build, before any Hugging Face import.
+    # One call covers every command, including build, before any Hugging Face or torch import.
     quiet_hub()
+    quiet_torch()
     episode_id = None
     try:
         args = build_parser().parse_args(argv)

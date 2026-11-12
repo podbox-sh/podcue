@@ -33,11 +33,11 @@ Each write is validated when it's made, so there is no fix loop. `podcue check` 
 `fetch` and `build` need the `recap` extra. `start`, `cues`, and `label-groups` are unchanged; installing the extra is enough to run the whole recap, because the extra is a superset of the base package.
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue fetch https://example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue start ./ep/audio.wav
-uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
-uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
-uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue fetch https://example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue start ./ep/audio.wav
+uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
+uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
+uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 Pass `--python 3.12`. Kokoro 0.9.4 declares `Requires-Python: <3.13`. A direct media URL downloads without yt-dlp; a page URL needs it, from the same extra. Plain `uvx podcue` does not install the extra, so transcription stays light.
@@ -213,8 +213,8 @@ It fails, listing every problem, when:
 ### `podcue fetch <URL> [--out DIR]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
 ```
 
 ```json
@@ -229,7 +229,7 @@ uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue fetch https://www.youtube
 ### `podcue build <episodeId> <script.json> [--out FILE]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 ```json
@@ -301,11 +301,11 @@ This is optional. It downloads the two pinned diarization weight files now inste
   recap-cache/        narration and clip wavs reused by a later build of the same segment
   status.json         only while a start runs; removed when it ends
   failed.json         only after a failed start; removed by the next start
-  start.lock          holds the running start's pid (empty otherwise)
-  write.lock          serializes label and summary writes
+  start.lock          only while a start runs; removed when the command finishes
+  write.lock          only while a label or summary write runs; removed when it finishes
 ```
 
-Every file is written to a temp file and renamed into place, so a reader never sees half a file. The only coordination is the two lock files. `start.lock` is held with `flock` and holds the pid, so a start that crashed leaves a stale lock, which the OS has already released and the next start replaces.
+Every file is written to a temp file and renamed into place, so a reader never sees half a file. The only coordination is the two lock files. `start.lock` is held with `flock` and holds the pid. `write.lock` is held the same way for one label or summary write. Both files are removed when the command finishes, including when it fails. A crash can leave the file. The OS has already released the flock, and the next command takes it and removes it when it finishes.
 
 | File | Schema |
 | --- | --- |
@@ -385,12 +385,13 @@ The `moonshine` extra is separate and unchanged: its non-English models are non-
 
 ```sh
 uv run pytest                                  # unit tests + smoke test
-uv run pytest --ignore tests/test_smoke.py --ignore tests/test_start_en.py
+uv run pytest --ignore tests/test_smoke.py --ignore tests/test_start_en.py --ignore tests/test_build_en.py
 uv run --extra moonshine pytest tests/test_smoke.py
 PODCUE_LIVE_EN=1 uv run --extra asr pytest tests/test_start_en.py
+PODCUE_LIVE_EN=1 uv run --python 3.12 --extra recap pytest tests/test_build_en.py
 ```
 
-Unit tests do not install the `asr` or `recap` extras. They stub Kokoro, the downloader, and diarization. `build` and `fetch` still need ffmpeg only when those stubs are not in place. `tests/test_start_en.py` runs a real `start` on espeak-ng speech, once with the `asr` extra and once with `--transcript`. It skips unless `PODCUE_LIVE_EN=1`.
+Unit tests do not install the `asr` or `recap` extras. They stub Kokoro, the downloader, and diarization. `build` and `fetch` still need ffmpeg only when those stubs are not in place. `tests/test_start_en.py` runs a real `start` on espeak-ng speech, once with the `asr` extra and once with `--transcript`. It skips unless `PODCUE_LIVE_EN=1`. `tests/test_build_en.py` runs a real `build` with Kokoro narration and one clip and checks that the output file plays. It skips unless `PODCUE_LIVE_EN=1`. CI runs it on Python 3.12 with the `recap` extra.
 
 The smoke test synthesizes a short two-voice clip and runs the whole flow through the real CLI and models: start, cues, label-groups, start-summary, post-paragraph, set-summary, summary, check. It uses macOS `say` (and expects two groups) or `espeak-ng` (whose voices usually cluster as one). It skips with the reason when ffmpeg or a synthesizer is missing.
 
@@ -400,7 +401,9 @@ Bump `version` in `pyproject.toml` and `__version__` in `podcue/__init__.py` to 
 
 Create a GitHub release tagged `v` plus that version, for example `v0.2.1`. Publishing the release runs [publish.yml](.github/workflows/publish.yml). It builds the sdist and wheel, checks that the built version matches the tag with a leading `v` removed, and publishes to PyPI with trusted publishing. The workflow stores no PyPI token. Running the workflow by hand (`workflow_dispatch`) publishes the selected commit the same way, without the tag check.
 
-0.2.5 is the package version on this branch. It is not tagged and not published. See [CHANGELOG.md](CHANGELOG.md). A local source path is stored absolute, English narration downloads a pinned spaCy model and is leveled when it is synthesized, and `start --fresh` moves `labels.json` aside.
+0.2.6 is the package version on this branch. It is not tagged and not published. See [CHANGELOG.md](CHANGELOG.md). Narration is written as 16-bit WAV before the loudness pass, lock files are removed when a command finishes, and Kokoro's torch warnings stay off during `build`.
+
+0.2.5, which is not yet published, stores a local source path as absolute, downloads a pinned spaCy model for English narration, levels that narration when it is synthesized, and `start --fresh` moves `labels.json` aside.
 
 0.2.4 switches built-in ASR for `en de fr es it nl pl` to Whisper small (faster-whisper). `ja`, `ko`, and `zh` stay on Moonshine.
 

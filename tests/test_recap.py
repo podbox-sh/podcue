@@ -30,7 +30,7 @@ from podcue.store import Episode
 
 
 def test_version_is_0_2_0():
-    assert __version__ == "0.2.5"
+    assert __version__ == "0.2.6"
 
 
 def test_importing_the_cli_does_not_load_the_recap_extra():
@@ -207,17 +207,24 @@ def test_narration_gain_targets_the_mix_and_limits_the_peak():
     assert "level=false" in text
 
 
-def test_quiet_torch_ignores_torch_deprecations_only():
+def test_quiet_torch_ignores_torch_warnings_only():
     quiet_torch()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         quiet_torch()
         warnings.warn_explicit(
-            "torch.nn.utils.weight_norm is deprecated",
-            DeprecationWarning,
-            filename="torch/nn/utils/weight_norm.py",
+            "`torch.nn.utils.weight_norm` is deprecated",
+            FutureWarning,
+            filename="kokoro/model.py",
             lineno=1,
-            module="torch.nn.utils.weight_norm",
+            module="kokoro.model",
+        )
+        warnings.warn_explicit(
+            "dropout option adds dropout after all but last recurrent layer",
+            UserWarning,
+            filename="torch/nn/modules/rnn.py",
+            lineno=1,
+            module="torch.nn.modules.rnn",
         )
         warnings.warn_explicit(
             "something else is deprecated",
@@ -228,6 +235,7 @@ def test_quiet_torch_ignores_torch_deprecations_only():
         )
     messages = [str(item.message) for item in caught]
     assert not any("weight_norm" in message for message in messages)
+    assert not any("dropout" in message for message in messages)
     assert any("something else" in message for message in messages)
 
 

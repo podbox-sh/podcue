@@ -1,9 +1,10 @@
 """The episode folder. Every piece of state lives in a file here; there is no other process.
 
 Writes go through a temp file plus rename, so a reader never sees half a file. `start.lock`
-holds the pid of the running start under an flock, so the OS releases it when that process
-dies and a later start replaces it. Read-modify-write commands (labels, summaries) hold
-`write.lock` for the length of one call.
+holds the pid of the running start under an flock and is removed when that command finishes,
+including when it fails. A crash can leave the file; the OS has already released the flock
+and the next start takes it. Read-modify-write commands (labels, summaries) hold `write.lock`
+for the length of one call and remove it the same way.
 """
 
 from __future__ import annotations
@@ -89,9 +90,29 @@ def try_lock(path: Path) -> int | None:
     return fd
 
 
-def release(fd: int) -> None:
-    os.ftruncate(fd, 0)
-    os.close(fd)
+def release(fd: int, path: Path) -> None:
+    """Drop a lock this process holds and remove its file."""
+    _remove_lock(fd, path)
+
+
+def _remove_lock(fd: int, path: Path) -> None:
+    """Unlink `path` while `fd` still holds it, then close `fd`.
+
+    The inode check leaves a newer lock file alone if one replaced this one.
+    """
+    try:
+        held = os.fstat(fd)
+        current = os.stat(path)
+    except OSError:
+        os.close(fd)
+        return
+    try:
+        if held.st_ino == current.st_ino and held.st_dev == current.st_dev:
+            os.unlink(path)
+    except FileNotFoundError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def lock_pid(path: Path) -> int | None:
@@ -117,11 +138,16 @@ def pid_alive(pid: int) -> bool:
 def writing(episode: Episode):
     """Serialize read-modify-write calls on one episode."""
     fd = os.open(episode.write_lock, os.O_RDWR | os.O_CREAT, 0o644)
+    acquired = False
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
+        acquired = True
         yield
     finally:
-        os.close(fd)
+        if acquired:
+            _remove_lock(fd, episode.write_lock)
+        else:
+            os.close(fd)
 
 
 def summary_ids(episode: Episode) -> list[str]:

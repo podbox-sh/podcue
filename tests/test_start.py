@@ -10,7 +10,7 @@ from conftest import make_wav, run
 
 from podcue import audio, pipeline, transcribe, weights
 from podcue.cli import execute, main as cli_main
-from podcue.store import Episode, try_lock
+from podcue.store import Episode, try_lock, writing
 
 
 def expected_id(path):
@@ -44,8 +44,9 @@ def test_start_writes_the_folder_and_is_idempotent(engine, root, tmp_path, capsy
 
     folder = root / "episodes" / view["episodeId"]
     assert {p.name for p in folder.iterdir()} == {
-        "episode.json", "transcript.vtt", "cues.json", "groups.json", "start.lock"}
-    assert (folder / "start.lock").read_text() == ""
+        "episode.json", "transcript.vtt", "cues.json", "groups.json"}
+    assert not (folder / "start.lock").exists()
+    assert not (folder / "write.lock").exists()
     assert "<v gc0001>line 1." in (folder / "transcript.vtt").read_text()
 
     again, code = run(capsys, "start", wav, "--language", "de")
@@ -177,7 +178,7 @@ def test_a_lock_left_by_a_dead_process_is_stale_and_replaced(engine, root, tmp_p
     result, code = run(capsys, "start", wav)
     assert code == 0 and result["created"] is True
     assert result["episode"]["createdAt"] == "2026-11-11T23:53:00Z"
-    assert not episode.status.exists() and episode.start_lock.read_text() == ""
+    assert not episode.status.exists() and not episode.start_lock.exists()
 
 
 def test_a_failed_start_writes_failed_json_and_a_later_start_retries(engine, root, tmp_path, capsys, monkeypatch):
@@ -190,6 +191,7 @@ def test_a_failed_start_writes_failed_json_and_a_later_start_retries(engine, roo
     failed = json.loads(episode.failed.read_text())
     assert failed["message"] == "model exploded" and failed["stage"] == "diarize"
     assert not episode.status.exists() and not episode.cues.exists()
+    assert not episode.start_lock.exists() and not episode.write_lock.exists()
 
     view, _ = run(capsys, "episode", episode.id)
     assert view["artifacts"][1] == {"artifact": "cues", "state": "failed", "message": "model exploded"}
@@ -268,3 +270,15 @@ def test_usage_errors_are_one_json_line(capsys):
 def test_unknown_episode(root, capsys):
     assert run(capsys, "episode", "ep_0000000000000000") == ({"state": "unknown", "episodeId": "ep_0000000000000000"}, 0)
     assert run(capsys, "cues", "../../etc")[0]["state"] == "unknown"
+
+
+def test_write_lock_is_removed_when_the_command_finishes(tmp_path):
+    episode = Episode(tmp_path, "ep_" + "ab" * 8)
+    episode.dir.mkdir(parents=True)
+    with writing(episode):
+        assert episode.write_lock.is_file()
+    assert not episode.write_lock.exists()
+    with pytest.raises(RuntimeError, match="failed write"):
+        with writing(episode):
+            raise RuntimeError("failed write")
+    assert not episode.write_lock.exists()
