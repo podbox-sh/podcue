@@ -22,13 +22,13 @@ from .groups import (
     BadRange,
     Unknown,
     assign_speakers,
+    cue_ids_between,
     host_names,
     known_groups,
     labeled_share,
-    merge_labels,
     page,
     parse_label_updates,
-    resolve_label_updates,
+    apply_label_updates,
     undetermined_share,
 )
 from .transcribe import quiet_hub
@@ -36,6 +36,7 @@ from .store import (
     SUMMARY_ID,
     Episode,
     dump_yaml,
+    load_cue_labels,
     load_labels,
     load_rows,
     read_json,
@@ -237,27 +238,37 @@ def run_label_groups(args, root):
         raise Failure(LABEL_SHAPE)
     episode = _episode(root, args.episodeId)
     rows = _ready(episode)
+    known = known_groups(rows)
     try:
-        resolved = resolve_label_updates(rows, updates)
+        for update in updates:
+            if "groupId" in update:
+                if update["groupId"] not in known:
+                    raise Unknown(groupId=update["groupId"])
+            else:
+                cue_ids_between(rows, update["fromCue"], update["toCue"])
+        with writing(episode):
+            labels, cue_labels = apply_label_updates(
+                rows, load_labels(episode), load_cue_labels(episode), updates,
+            )
+            assign_speakers(rows, labels, cue_labels)
+            stored = {"groups": labels}
+            if cue_labels:
+                stored["cues"] = cue_labels
+            write_json(episode.labels, stored)
+            write_json(episode.cues, rows)
     except BadRange as error:
         raise Failure(str(error)) from None
-    known = known_groups(rows)
-    for update in resolved:
-        if update["groupId"] not in known:
-            raise Unknown(groupId=update["groupId"])
-    with writing(episode):
-        labels = merge_labels(load_labels(episode), resolved)
-        assign_speakers(rows, labels)
-        write_json(episode.labels, {"groups": labels})
-        write_json(episode.cues, rows)
     share = labeled_share(rows, labels)
-    return {
+    result = {
         "state": "present",
         "episodeId": episode.id,
         "labels": labels,
         "labeledShare": share,
         "undeterminedShare": undetermined_share(rows, labels),
     }
+    if cue_labels:
+        result["cueLabels"] = cue_labels
+    return result
 
 
 def run_start_summary(args, root):

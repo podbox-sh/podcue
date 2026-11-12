@@ -152,6 +152,14 @@ def load_labels(episode: Episode) -> list[dict]:
     return [] if stored is None else stored["groups"]
 
 
+def load_cue_labels(episode: Episode) -> list[dict]:
+    stored = read_json(episode.labels)
+    if not isinstance(stored, dict):
+        return []
+    cues = stored.get("cues") or []
+    return [item for item in cues if isinstance(item, dict) and "id" in item and "label" in item]
+
+
 def dump_yaml(value: object) -> str:
     return yaml.safe_dump(value, sort_keys=False, allow_unicode=True, width=1 << 30)
 

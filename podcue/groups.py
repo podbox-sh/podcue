@@ -17,7 +17,8 @@ MARKS = ("undetermined", "quote", "ending")
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 LABEL_SHAPE = (
-    "label-groups expects a JSON array of { groupId, label } or { fromCue, toCue, label }"
+    "label-groups expects a JSON array of { groupId, label } "
+    "or { fromCue, toCue, label, scope? } where scope is groups (default) or cues"
 )
 
 
@@ -61,6 +62,8 @@ def parse_label_updates(value: object) -> list[dict] | None:
         if has_group == has_range:
             return None
         if has_group:
+            if "scope" in item:
+                return None
             group_id = item.get("groupId")
             if not isinstance(group_id, str) or not group_id:
                 return None
@@ -69,7 +72,10 @@ def parse_label_updates(value: object) -> list[dict] | None:
         from_cue, to_cue = item.get("fromCue"), item.get("toCue")
         if not isinstance(from_cue, str) or not from_cue or not isinstance(to_cue, str) or not to_cue:
             return None
-        updates.append({"fromCue": from_cue, "toCue": to_cue, "label": label})
+        scope = item.get("scope", "groups")
+        if scope not in ("groups", "cues"):
+            return None
+        updates.append({"fromCue": from_cue, "toCue": to_cue, "label": label, "scope": scope})
     return updates
 
 
@@ -98,6 +104,19 @@ def groups_wholly_inside(rows: list[dict], from_cue: str, to_cue: str) -> list[s
     )
 
 
+def cue_ids_between(rows: list[dict], from_cue: str, to_cue: str) -> list[str]:
+    """Cue ids from `from_cue` through `to_cue`, inclusive, in cue order."""
+    order = [row["id"] for row in rows]
+    if from_cue not in order:
+        raise Unknown(cueId=from_cue)
+    if to_cue not in order:
+        raise Unknown(cueId=to_cue)
+    start, end = order.index(from_cue), order.index(to_cue)
+    if start > end:
+        raise BadRange(from_cue, to_cue)
+    return order[start : end + 1]
+
+
 def resolve_label_updates(rows: list[dict], updates: list[dict]) -> list[dict]:
     """Expand ranges to `{groupId, label}` entries. Later entries still win in `merge_labels`."""
     resolved: list[dict] = []
@@ -105,23 +124,75 @@ def resolve_label_updates(rows: list[dict], updates: list[dict]) -> list[dict]:
         if "groupId" in update:
             resolved.append({"groupId": update["groupId"], "label": update["label"]})
             continue
+        if update.get("scope", "groups") == "cues":
+            continue
         for group_id in groups_wholly_inside(rows, update["fromCue"], update["toCue"]):
             resolved.append({"groupId": group_id, "label": update["label"]})
     return resolved
 
 
-def assign_speakers(rows: list[dict], labels: list[dict]) -> None:
-    """Put each group's label on `speaker`. Before any label, `speaker` stays the group id.
+def _held(row: dict) -> bool:
+    speaker = row.get("speaker") or row["groupId"]
+    return speaker in HELD_SPEAKERS or row["groupId"] in HELD_SPEAKERS
 
-    `uncertain` and `mixed` are left alone, including when the group they sit in is labeled.
+
+def apply_label_updates(
+    rows: list[dict], groups: list[dict], cue_labels: list[dict], updates: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Apply entries in order. A later entry wins, which is the existing override rule.
+
+    A cue-scoped range sets `speaker` on the cues inside the window and does not change the
+    group's label, so the same group keeps its label outside the window. A later per-group
+    entry, or a later range whose scope is `groups`, sets that group label and clears cue
+    overrides on the group's cues. `uncertain` and `mixed` are never changed.
+    """
+    group_map = {item["groupId"]: item["label"] for item in groups}
+    cue_map = {item["id"]: item["label"] for item in cue_labels}
+    by_id = {row["id"]: row for row in rows}
+    members: dict[str, list[str]] = {}
+    for row in rows:
+        members.setdefault(row["groupId"], []).append(row["id"])
+
+    def paint_group(group_id: str, label: str) -> None:
+        group_map[group_id] = label
+        for cue_id in members.get(group_id, []):
+            cue_map.pop(cue_id, None)
+
+    for update in updates:
+        if "groupId" in update:
+            paint_group(update["groupId"], update["label"])
+            continue
+        if update.get("scope", "groups") == "cues":
+            for cue_id in cue_ids_between(rows, update["fromCue"], update["toCue"]):
+                row = by_id[cue_id]
+                if _held(row):
+                    continue
+                cue_map[cue_id] = update["label"]
+            continue
+        for group_id in groups_wholly_inside(rows, update["fromCue"], update["toCue"]):
+            paint_group(group_id, update["label"])
+    group_out = [{"groupId": group_id, "label": group_map[group_id]} for group_id in sorted(group_map)]
+    cue_out = [{"id": cue_id, "label": cue_map[cue_id]} for cue_id in sorted(cue_map)]
+    return group_out, cue_out
+
+
+def assign_speakers(rows: list[dict], labels: list[dict], cue_labels: list[dict] | None = None) -> None:
+    """Put each group's label on `speaker`, then any per-cue label on top.
+
+    Before any label, `speaker` stays the group id. `uncertain` and `mixed` are left alone,
+    including when the group they sit in is labeled or a cue-scoped range covers them.
     """
     by_group = {item["groupId"]: item["label"] for item in labels}
+    by_cue = {item["id"]: item["label"] for item in (cue_labels or [])}
     for row in rows:
         speaker = row.get("speaker") or row["groupId"]
         if speaker in HELD_SPEAKERS or row["groupId"] in HELD_SPEAKERS:
             row["speaker"] = speaker if speaker in HELD_SPEAKERS else row["groupId"]
             continue
-        row["speaker"] = by_group.get(row["groupId"], row["groupId"])
+        if row["id"] in by_cue:
+            row["speaker"] = by_cue[row["id"]]
+        else:
+            row["speaker"] = by_group.get(row["groupId"], row["groupId"])
 
 
 def known_groups(rows: list[dict]) -> set[str]:

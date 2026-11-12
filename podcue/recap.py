@@ -263,7 +263,7 @@ def load_script(path: Path) -> Script:
     return parse_script(value)
 
 
-def words_from_cues(rows: list[dict]) -> list[tuple[float, float, str]]:
+def words_from_cues(rows: list[dict]) -> list[tuple]:
     """Spread each cue's words across its start and end.
 
     Cues carry no per-word timestamps. The spacing is by character length, so a clip edge still
@@ -280,7 +280,14 @@ def words_from_cues(rows: list[dict]) -> list[tuple[float, float, str]]:
         cursor = start
         for token in tokens:
             span = (end - start) * (len(token) + 1) / weight
-            words.append((round(cursor, 2), round(min(end, cursor + span), 2), f" {token}"))
+            words.append((
+                round(cursor, 2),
+                round(min(end, cursor + span), 2),
+                f" {token}",
+                start,
+                end,
+                row.get("speaker") or row.get("groupId") or "",
+            ))
             cursor += span
     return words
 
@@ -289,7 +296,8 @@ def snap(words: list[tuple[float, float, str]], start: float, end: float) -> tup
     """Snap to the nearest word edges, then pad halfway into the neighbouring silence.
 
     Returns `(start, end, first_word, last_word)`. The pad is at most 0.25 s before the first
-    word and 0.35 s after the last, and never crosses the next word.
+    word and 0.35 s after the last, and never crosses the next word. When a word carries its
+    cue bounds, the pad also stays inside that cue and out of an adjacent cue of another speaker.
     """
     if not words:
         raise RecapError("the episode has no cue text to snap a clip to")
@@ -301,7 +309,35 @@ def snap(words: list[tuple[float, float, str]], start: float, end: float) -> tup
     next_start = words[last + 1][0] if last + 1 < len(words) else words[last][1] + 0.5
     snapped_start = words[first][0] - min(0.25, max(0.0, (words[first][0] - previous_end) / 2))
     snapped_end = words[last][1] + min(0.35, max(0.05, (next_start - words[last][1]) / 2))
+    # The pad must stay inside the cues that own the chosen words, and must not cross
+    # into an adjacent cue of another speaker.
+    own_start = _word_field(words[first], 3)
+    own_end = _word_field(words[last], 4)
+    if own_start is not None:
+        snapped_start = max(snapped_start, own_start)
+    if own_end is not None:
+        snapped_end = min(snapped_end, own_end)
+    if first:
+        prev_speaker = _word_field(words[first - 1], 5)
+        this_speaker = _word_field(words[first], 5)
+        prev_cue_end = _word_field(words[first - 1], 4)
+        if prev_speaker is not None and this_speaker is not None and prev_speaker != this_speaker and prev_cue_end is not None:
+            snapped_start = max(snapped_start, prev_cue_end)
+    if last + 1 < len(words):
+        next_speaker = _word_field(words[last + 1], 5)
+        this_speaker = _word_field(words[last], 5)
+        next_cue_start = _word_field(words[last + 1], 3)
+        if next_speaker is not None and this_speaker is not None and next_speaker != this_speaker and next_cue_start is not None:
+            snapped_end = min(snapped_end, next_cue_start)
+    if snapped_end < snapped_start:
+        snapped_end = snapped_start
     return round(snapped_start, 2), round(snapped_end, 2), first, last
+
+
+def _word_field(word: tuple, index: int):
+    if len(word) <= index:
+        return None
+    return word[index]
 
 
 FLAGGED_SPEAKERS = ("uncertain", "mixed", "undetermined")

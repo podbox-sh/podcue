@@ -67,6 +67,21 @@ def whisper_pin(language: str) -> WhisperPin:
     return WHISPER_EN if language == "en" else WHISPER_MULTI
 
 
+def asr_record(language: str, external: bool) -> dict:
+    """Engine, model id, and revision stored on the episode.
+
+    `--transcript` is `external` with no model. Moonshine records its arch (`tiny` or `base`).
+    Whisper records the pinned Hugging Face repo and commit.
+    """
+    if external:
+        return {"engine": "external", "model": None, "revision": None}
+    if language in MOONSHINE_ARCH:
+        arch = MOONSHINE_ARCH[language]
+        return {"engine": "moonshine", "model": "moonshine", "revision": "tiny" if arch == 0 else "base"}
+    pin = whisper_pin(language)
+    return {"engine": "faster-whisper", "model": pin.repo, "revision": pin.revision}
+
+
 def quiet_hub() -> None:
     """Public pinned downloads do not need a Hugging Face token.
 

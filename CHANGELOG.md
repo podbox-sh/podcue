@@ -8,6 +8,9 @@ Not tagged and not published. The package metadata is `0.2.5`.
 - The first English narration downloads the pinned spaCy `en_core_web_sm` 3.8.0 wheel and says so on stderr. It is not a PyPI dependency.
 - Narration is gained to -16 LUFS when it is synthesized and limited to -1.5 dBTP. The mix does not apply a boost larger than 3 dB. Torch deprecation warnings from Kokoro are filtered.
 - `start --fresh` recomputes one episode's transcript, cues, and groups, and moves `labels.json` to `labels.prev.json` (replacing any older prev) so labels are done again. Other episodes, summaries, and the shared weight cache stay. `--root` with a new directory is a separate cold run.
+- `start` records `asr` on the episode: faster-whisper with its pinned model and revision, Moonshine with arch `tiny` or `base`, or `external` for `--transcript`.
+- Cue text joins number punctuation without a stray space (`400,000`, `2.4%`). A snapped clip stays inside its cues and does not overlap an adjacent cue of another speaker.
+- `label-groups` accepts `"scope": "cues"` on a range. That sets `speaker` on the cues in the window and leaves the group's other cues alone. Later entries still win. `uncertain` and `mixed` are never relabeled.
 
 ## 0.2.4
 

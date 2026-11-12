@@ -104,14 +104,29 @@ def test_words_are_spread_across_the_cue_and_edges_snap_to_them():
         {"startMs": 0, "endMs": 1_000, "text": "ab c"},
         {"startMs": 10_000, "endMs": 11_000, "text": "next bit."},
     ])
-    assert words[0] == (0.0, 0.6, " ab")
-    assert words[1] == (0.6, 1.0, " c")
+    assert words[0][:3] == (0.0, 0.6, " ab")
+    assert words[1][:3] == (0.6, 1.0, " c")
     start, end, first, last = snap(
         [(0.0, 0.4, " hello"), (0.5, 0.9, " there."), (10.0, 10.4, " next"), (10.5, 11.0, " bit.")],
         0.5,
         10.4,
     )
     assert (start, end, first, last) == (0.45, 10.45, 1, 2)
+
+
+def test_snap_stays_inside_the_cue_and_out_of_another_speaker():
+    # Without the clamp the leading pad is 10.00 - 0.08 = 9.92, inside the previous cue,
+    # and the trailing pad is 19.90 + 0.35 = 20.25, inside the next speaker's cue.
+    words = [
+        (9.50, 9.84, " earlier", 0.0, 10.0, "Ada"),
+        (10.00, 10.50, " clip", 10.0, 20.0, "Ben"),
+        (19.50, 19.90, " tail", 10.0, 20.0, "Ben"),
+        (21.00, 21.40, " next", 20.0, 30.0, "Ada"),
+    ]
+    start, end, first, last = snap(words, 10.0, 19.9)
+    assert (first, last) == (1, 2)
+    assert start == 10.0
+    assert end == 20.0
 
 
 def test_length_warns_only_under_4s_or_over_45s_and_an_uncertain_cue_is_flagged():
@@ -178,6 +193,10 @@ def test_length_warns_only_under_4s_or_over_45s_and_an_uncertain_cue_is_flagged(
     ]
     labeled = [{"groupId": "gc0001", "label": "Ada"}, {"groupId": "gc0002", "label": "Ada"}]
     assert clip_speakers(same_person, labeled, 0.0, 16.0)["speakers"] == 1
+    quotes = clip_speakers([
+        {"startMs": 0, "endMs": 12_000, "groupId": "gc0001", "speaker": "quote", "text": "played"},
+    ], [{"groupId": "gc0001", "label": "Ada"}], 0.0, 12.0)
+    assert quotes["dominant"] == "quote" and quotes["speakers"] == 1
     assert clip_flags(12.0, {"speakers": 0, "otherSeconds": 0.0}) == ["no speech in clip"]
 
 

@@ -31,6 +31,10 @@ def test_start_writes_the_folder_and_is_idempotent(engine, root, tmp_path, capsy
     assert view["episodeId"] == expected_id(wav)
     assert view["dir"] == str(root / "episodes" / view["episodeId"])
     assert (view["source"], view["durationMs"], view["language"]) == (str(wav.resolve()), 1_000, "en")
+    from podcue.transcribe import WHISPER_EN
+    assert view["asr"] == {
+        "engine": "faster-whisper", "model": WHISPER_EN.repo, "revision": WHISPER_EN.revision,
+    }
     assert [(a["artifact"], a["state"], a["progress"]) for a in view["artifacts"]] == [
         ("transcript", "ready", 100), ("cues", "ready", 100)]
     assert [g["groupId"] for g in view["groups"]] == ["gc0001", "gc0002", "ungrouped"]

@@ -103,7 +103,8 @@ def test_quote_does_not_count_as_a_labeled_speaker(episode_id, capsys):
 def test_label_groups_rejects_a_bad_body(episode_id, capsys, body):
     assert run(capsys, "label-groups", episode_id, body) == (
         {"kind": "error", "message":
-         "label-groups expects a JSON array of { groupId, label } or { fromCue, toCue, label }"}, 1)
+         "label-groups expects a JSON array of { groupId, label } "
+         "or { fromCue, toCue, label, scope? } where scope is groups (default) or cues"}, 1)
 
 
 def test_label_groups_reports_an_unknown_group_and_writes_nothing(episode_id, root, capsys):

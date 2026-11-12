@@ -1,6 +1,6 @@
 import pytest
 
-from podcue.cues import Cue, Word, build_cues, cue_rows, group_table, render_vtt, shift, stamp
+from podcue.cues import Cue, Word, build_cues, cue_rows, group_table, join_cue_text, render_vtt, shift, stamp
 from podcue.diarize import Tracks, Turn
 from podcue.regions import Slice
 
@@ -21,7 +21,13 @@ def test_shift_rejects_bad_word_times(bad):
         shift(0, bad)
 
 
-def test_sentence_punctuation_closes_a_cue():
+def test_number_punctuation_joins_without_a_space():
+    assert join_cue_text(["400", ",000"]) == "400,000"
+    assert join_cue_text(["2", ".4%"]) == "2.4%"
+    assert join_cue_text(["400", ",", "000"]) == "400,000"
+    assert join_cue_text(["Hello", "there."]) == "Hello there."
+    words = [Word("400", 0.0, 0.2), Word(",000", 0.2, 0.4), Word("and", 0.5, 0.7), Word("2", 0.8, 0.9), Word(".4%", 0.9, 1.1)]
+    assert build_cues([(whole(0, 5_000), words)])[0].text == "400,000 and 2.4%"
     words = [Word("Hello", 0.0, 0.4), Word("there.", 0.5, 0.9), Word("Next", 1.0, 1.3), Word("one?", 1.4, 1.8)]
     assert build_cues([(whole(10_000, 20_000), words)]) == [
         Cue("c0001", 10_000, 10_900, "Hello there."),

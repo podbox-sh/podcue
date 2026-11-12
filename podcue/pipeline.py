@@ -20,7 +20,7 @@ from .cues import build_cues, cue_rows, group_table, render_vtt
 from .diarize import Diarizer, Tracks
 from .regions import plan_regions
 from .store import Episode, lock_pid, read_json, release, retire_labels, try_lock, write_json, write_text
-from .transcribe import LANGUAGES, open_transcriber, quiet_hub
+from .transcribe import LANGUAGES, asr_record, open_transcriber, quiet_hub
 from .transcript import assign_words
 
 
@@ -151,6 +151,7 @@ def start(source: str, language: str, root: Path, transcript_words=None, fresh: 
                 "durationMs": audio.duration_ms(samples),
                 "language": language,
                 "createdAt": started_at,
+                "asr": asr_record(language, transcript_words is not None),
             })
             cues, tracks = transcribe(samples, language, report, transcript_words)
             if fresh:
