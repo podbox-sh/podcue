@@ -15,8 +15,9 @@ from podcue.transcript import TranscriptError, assign_words, parse_transcript, r
 def test_importing_podcue_does_not_load_asr():
     script = (
         "import podcue.cli, podcue.pipeline, sys; "
+        "assert 'faster_whisper' not in sys.modules; "
+        "assert 'ctranslate2' not in sys.modules; "
         "assert 'cactus' not in sys.modules; "
-        "assert 'needle' not in sys.modules; "
         "assert 'moonshine_voice' not in sys.modules"
     )
     subprocess.run([sys.executable, "-c", script], check=True)

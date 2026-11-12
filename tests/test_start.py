@@ -3,7 +3,6 @@ import json
 import os
 import subprocess
 import sys
-import types
 import warnings
 
 import pytest
@@ -145,17 +144,6 @@ def test_a_missing_file_is_rejected_before_any_model_or_download(monkeypatch, ro
     assert code == 1 and result["reason"] == "not-found"
     result, code = run(capsys, "start", make_wav(tmp_path / "ep.wav"), "--language", "xx")
     assert code == 1 and result["reason"] == "unknown-language"
-
-
-@pytest.mark.parametrize("preset, expected", [(None, "0"), ("1", "1")])
-def test_cactus_telemetry_is_off_unless_the_user_set_it(monkeypatch, preset, expected):
-    if preset is None:
-        monkeypatch.delenv("CACTUS_TELEMETRY", raising=False)
-    else:
-        monkeypatch.setenv("CACTUS_TELEMETRY", preset)
-    monkeypatch.setitem(sys.modules, "cactus", types.ModuleType("cactus"))
-    transcribe.NeedleTranscriber("en")
-    assert os.environ["CACTUS_TELEMETRY"] == expected
 
 
 def test_start_silences_an_hf_token_warning(engine, root, tmp_path, capsys, monkeypatch):

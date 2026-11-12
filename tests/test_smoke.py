@@ -2,7 +2,7 @@
 start -> cues -> label-groups -> start-summary -> post-paragraph -> set-summary -> summary -> check.
 
 Needs ffmpeg, a speech synthesizer (`say` on macOS, or espeak-ng) and network access the first
-time, for the diarization weights and, with the asr extra, the cactus-compute model. Skips with the reason when a tool is missing.
+time, for the diarization weights and, with the asr extra, the Whisper small weights. Skips with the reason when a tool is missing.
 """
 
 import json

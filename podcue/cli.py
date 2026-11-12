@@ -83,8 +83,9 @@ def build_parser() -> Parser:
     start = command("start", "diarize an audio file or URL and build cues, from built-in ASR or a transcript")
     start.add_argument("source", help="audio or video file, or an http(s) URL to one")
     start.add_argument("--language", default=None, metavar="CODE",
-                       help="built-in ASR: en de fr es it nl pl, or ja ko zh with the moonshine extra "
-                            "(default: en). With --transcript, any code; the file's language is used when this is omitted")
+                       help="built-in ASR: Whisper small.en for en, Whisper small for de fr es it nl pl "
+                            "(asr extra), or ja ko zh with the moonshine extra (default: en). "
+                            "With --transcript, any code; the file's language is used when this is omitted")
     start.add_argument("--transcript", metavar="FILE",
                        help='JSON {"language", "segments": [{startMs, endMs, text, words?}]} instead of built-in ASR')
 

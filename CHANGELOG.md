@@ -1,8 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Built-in speech-to-text for `en de fr es it nl pl` is Whisper small through faster-whisper 1.2.1, on CPU at int8. English uses `Systran/faster-whisper-small.en` at commit `d1d751a5f8271d482d14ca55d9e2deeebbae577f`. The other six languages use `Systran/faster-whisper-small` at `536b0662742c02347bc0e980a01041f333bce120`. `model.bin` is checked by size and SHA-256. `ja`, `ko`, and `zh` stay on Moonshine. cactus-compute is no longer a dependency. The package version is still 0.2.3; this change is not tagged.
+
 ## 0.2.3
 
-Not tagged and not published. The package metadata is `0.2.3`.
+Released.
 
 - After `label-groups`, each cue's `speaker` is the label of its group (`Ada`, `quote`, `undetermined`, …). `groupId` is unchanged. Before any label, `speaker` is still the group id. A cue that is `uncertain` or `mixed` keeps that speaker when the group is labeled.
 - `build` compares those `speaker` values. Two groups labeled the same person are one speaker. A cue whose speaker is `uncertain`, `mixed`, or `undetermined` flags the clip even when it is shorter than 1 second and 8% of the clip. A 0.2.2 cues file, where `speaker` is still the group id, still uses `labels.json` for that comparison.
