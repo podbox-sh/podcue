@@ -56,6 +56,10 @@ kokoro 0.9.4 (narration; Python >=3.10, <3.13)
   Downloaded on first narration into the Hugging Face cache. Not part of this package.
   Training audio under CC BY, used for a few hours of Kokoro v1.0: Koniwa `tnc`
   (CC BY 3.0, under 1 hour) and SIWIS (CC BY 4.0, under 11 hours). See the model card.
+  English grapheme-to-phoneme loads spaCy en_core_web_sm 3.8.0 (MIT). That model is
+  not on PyPI. podcue downloads the pinned wheel and checks its SHA-256:
+  https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+  sha256 1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85
 
 misaki 0.9.4, extra `en` (grapheme-to-phoneme, required by kokoro)
   https://github.com/hexgrad/misaki

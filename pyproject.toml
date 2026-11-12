@@ -21,6 +21,7 @@ asr = ["faster-whisper==1.2.1", "ctranslate2==4.9.0"]
 moonshine = ["moonshine-voice==0.1.5"]
 # Kokoro 0.9.4 declares Requires-Python <3.13. The marker keeps 3.13 and 3.14 installable
 # for a transcript-only start. Narration needs `uvx --python 3.12 --from 'podcue[recap]==0.2.4'`.
+# en_core_web_sm is not on PyPI. Narration downloads the pinned 3.8.0 wheel and prints a line.
 recap = [
   "faster-whisper==1.2.1",
   "ctranslate2==4.9.0",

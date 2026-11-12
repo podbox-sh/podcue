@@ -9,11 +9,15 @@ in the `recap` extra and are imported only when a narration or a page download n
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import math
 import shutil
 import subprocess
 import sys
+import sysconfig
+import warnings
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +25,7 @@ from . import __version__
 from .audio import is_url
 from .store import Episode, load_labels, write_text
 from .transcribe import quiet_hub
+from .weights import Pin, ensure
 
 # Mix rate. Kokoro's voices are 24 kHz, and every segment is resampled to match before the join.
 SAMPLE_RATE = 24_000
@@ -42,6 +47,16 @@ OTHER_MIN_FRAC = 0.08
 CLIP_WARN_UNDER_S = 4.0
 CLIP_WARN_OVER_S = 45.0
 KOKORO_REPO = "hexgrad/Kokoro-82M"
+# Not on PyPI. The wheel is the GitHub release; PyPI rejects a direct-URL dependency.
+SPACY_MODEL = Pin(
+    label="spaCy model en_core_web_sm 3.8.0",
+    file="en_core_web_sm-3.8.0-py3-none-any.whl",
+    url="https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    bytes=12_806_118,
+    sha256="1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85",
+    license="MIT",
+    attribution="Explosion en_core_web_sm 3.8.0, the English pipeline Kokoro's G2P loads.",
+)
 
 SCRIPT_SHAPE = (
     "script.json must be { voice?, voice_preset?, output?, segments: [ "
@@ -71,6 +86,47 @@ def _kokoro_missing() -> str:
 
 def log(message: str) -> None:
     print(f"podcue: {message}", file=sys.stderr, flush=True)
+
+
+def quiet_torch() -> None:
+    """Hide Kokoro's torch deprecation warnings. Other libraries still warn."""
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module=r"torch(\..*)?")
+    warnings.filterwarnings("ignore", message=r".*torch\.nn\.utils\.weight_norm.*")
+    warnings.filterwarnings("ignore", message=r".*torch\.cuda\.amp\.autocast.*")
+
+
+def _spacy_installed() -> bool:
+    from importlib.metadata import PackageNotFoundError, distribution
+
+    for name in ("en-core-web-sm", "en_core_web_sm"):
+        try:
+            distribution(name)
+        except PackageNotFoundError:
+            continue
+        return True
+    return False
+
+
+def ensure_spacy_model() -> None:
+    """Install the pinned English spaCy model if this environment does not have it.
+
+    `en_core_web_sm` is not published on PyPI, and a direct URL in the package metadata
+    is rejected there. The wheel is downloaded once, checked, and unpacked into this env.
+    Misaki would otherwise download it with no message the first time Kokoro speaks.
+    """
+    if _spacy_installed():
+        return
+    wheel = ensure(SPACY_MODEL)
+    if _spacy_installed():
+        return
+    log("installing spaCy model en_core_web_sm 3.8.0")
+    dest = Path(sysconfig.get_path("purelib"))
+    dest.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(wheel) as archive:
+        archive.extractall(dest)
+    importlib.invalidate_caches()
+    if not _spacy_installed():
+        raise RecapError("spaCy model en_core_web_sm 3.8.0 installed but could not be imported")
 
 
 def digest(*parts: str) -> str:
@@ -381,6 +437,17 @@ def _finite(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def narration_loudness_filter(measured_lufs: float) -> str:
+    """Gain that brings a Kokoro line to the mix target, then a true-peak limiter.
+
+    Two-pass loudnorm on a short line often leaves it near -27 LUFS, and the mix
+    later adds about 10 dB. The limiter is linear: -1.5 dBTP is 10^(-1.5/20).
+    """
+    gain = TARGET_I - measured_lufs
+    peak = 10 ** (TARGET_TP / 20)
+    return f"volume={gain:.2f}dB,alimiter=limit={peak:.4f}:level=false"
+
+
 def loudnorm_to(source: Path, dest: Path) -> float:
     """Two-pass loudnorm to -16 LUFS / -1.5 dBTP. Returns the source integrated loudness."""
     measured = measure_loudness(source)
@@ -426,10 +493,16 @@ def _samples(audio: object):
 
 
 def narrate(text: str, voice: str, dest: Path) -> None:
-    """Synthesize `text` with Kokoro at 24 kHz into `dest`. The pipeline is kept for the process."""
+    """Synthesize `text` with Kokoro at 24 kHz into `dest`, already at the mix loudness.
+
+    The pipeline is kept for the process. The file is gained to -16 LUFS and limited
+    to -1.5 dBTP so the mix does not apply that boost later.
+    """
     global _pipeline
-    # Kokoro imports huggingface_hub. The token warning is read at that import.
+    # Kokoro imports huggingface_hub and torch. The token warning and torch
+    # deprecations are read at that import.
     quiet_hub()
+    quiet_torch()
     # Imported here so `import podcue.recap` works without the recap extra (Kokoro pulls torch).
     try:
         import numpy as np
@@ -437,6 +510,7 @@ def narrate(text: str, voice: str, dest: Path) -> None:
         from kokoro import KPipeline
     except ModuleNotFoundError:
         raise RecapError(_kokoro_missing()) from None
+    ensure_spacy_model()
     if _pipeline is None:
         log(f"loading Kokoro voice {voice}")
         _pipeline = KPipeline(lang_code="a", repo_id=KOKORO_REPO, device="cpu")
@@ -449,7 +523,19 @@ def narrate(text: str, voice: str, dest: Path) -> None:
     if not pieces:
         raise RecapError("Kokoro returned no audio")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(dest), np.concatenate(pieces), SAMPLE_RATE)
+    raw = dest.with_name(dest.name + ".raw")
+    sf.write(str(raw), np.concatenate(pieces), SAMPLE_RATE)
+    try:
+        measured = _finite(measure_loudness(raw)["input_i"])
+        if measured is None:
+            raise RecapError("Kokoro narration had no measurable loudness")
+        run_ffmpeg([
+            "ffmpeg", "-y", "-loglevel", "error", "-i", str(raw),
+            "-af", narration_loudness_filter(measured),
+            "-ac", "1", "-ar", str(SAMPLE_RATE), str(dest),
+        ])
+    finally:
+        raw.unlink(missing_ok=True)
 
 
 def _ensure(path: Path, produce) -> None:
@@ -505,7 +591,18 @@ def stitch(paths: list[Path], dest: Path, work: Path) -> None:
         "-c", "copy", str(joined),
     ])
     normalized = work / "final.wav"
-    loudnorm_to(joined, normalized)
+    # Segments are already at the target. A mix that still wants more than 3 dB
+    # would be the late boost that clips a quiet narration; only limit its peaks.
+    measured = _finite(measure_loudness(joined)["input_i"])
+    if measured is not None and TARGET_I - measured <= 3.0:
+        loudnorm_to(joined, normalized)
+    else:
+        peak = 10 ** (TARGET_TP / 20)
+        run_ffmpeg([
+            "ffmpeg", "-y", "-loglevel", "error", "-i", str(joined),
+            "-af", f"alimiter=limit={peak:.4f}:level=false",
+            "-ac", "1", "-ar", str(SAMPLE_RATE), str(normalized),
+        ])
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.suffix.lower() == ".wav":
         run_ffmpeg([
@@ -626,6 +723,7 @@ def _public_segment(segment: dict) -> dict:
 
 def build(episode: Episode, rows: list[dict], script_path: Path, out_flag: str | None) -> dict:
     """Cut, narrate, stitch, and write `report.md` next to the audio. Flags do not fail the build."""
+    quiet_torch()
     script = load_script(script_path)
     source = episode_audio(episode)
     dest = output_path(script, out_flag)

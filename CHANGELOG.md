@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Not a version bump.
+
+- `episode.json` `source` for a local file is the absolute path. A later `start` of the same audio updates that path when the file has moved.
+- `start --fresh` recomputes one episode's transcript, cues, and groups. Other episodes, user labels, summaries, and the shared weight cache stay. `--root` with a new directory is a separate cold run.
+- English narration downloads the pinned spaCy `en_core_web_sm` 3.8.0 wheel and says so on stderr. It is not a PyPI dependency. Narration is gained to -16 LUFS when it is synthesized and limited to -1.5 dBTP. The mix does not apply a boost larger than 3 dB. Torch deprecation warnings from Kokoro are filtered.
+
 ## 0.2.4
 
 Not tagged and not published. The package metadata is `0.2.4`.

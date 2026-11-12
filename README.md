@@ -9,7 +9,7 @@ podcue is a local-only command line tool. Every command runs in the foreground, 
 - Python 3.12, 3.13 or 3.14 (onnxruntime 1.31.0 has no wheels for other versions). With [uv](https://docs.astral.sh/uv/) you don't need to install anything else in Python.
 - `ffmpeg` on `PATH`.
 - macOS or Linux (the episode lock uses `flock`).
-- Network access on the first `start`, to download the diarization weights and, with the `asr` extra, the pinned speech model. The first narration also downloads Kokoro weights.
+- Network access on the first `start`, to download the diarization weights and, with the `asr` extra, the pinned speech model. The first narration downloads Kokoro weights and, if it is not already installed, the pinned spaCy `en_core_web_sm` 3.8.0 wheel.
 - The `asr` extra (faster-whisper) for built-in speech-to-text: Whisper `small.en` for `en`, and multilingual Whisper `small` for `de fr es it nl pl`. Without it, pass `--transcript`. `ja ko zh` still need the `moonshine` extra.
 - The `recap` extra for `fetch` of a page and for `build`: `kokoro`, `soundfile`, and `yt-dlp`, plus faster-whisper so a recap install can still `start`. Kokoro 0.9.4 narrates on Python 3.12.
 
@@ -66,12 +66,13 @@ uvx podcue start ep12.mp3 --transcript transcript.json
 ```
 
 ```json
-{"kind": "started", "created": true, "episode": {"state": "present", "episodeId": "ep_3f9a1c2b7d4e5f60", "source": "ep12.mp3", "durationMs": 17664, "language": "en", "createdAt": "2026-11-05T10:12:03Z", "dir": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60", "artifacts": [{"artifact": "transcript", "state": "ready", "progress": 100, "path": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60/transcript.vtt"}, {"artifact": "cues", "state": "ready", "progress": 100, "path": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60/cues.json"}], "groups": [{"groupId": "gc0001", "speakingMs": 9760, "cueCount": 4, "nearestGroupId": "gc0003", "nearestCosine": 0.1873, "label": null}, {"groupId": "gc0003", "speakingMs": 5840, "cueCount": 3, "nearestGroupId": "gc0001", "nearestCosine": 0.1873, "label": null}], "labeledShare": 0.0, "undeterminedShare": 0.0, "summaries": []}}
+{"kind": "started", "created": true, "episode": {"state": "present", "episodeId": "ep_3f9a1c2b7d4e5f60", "source": "/Users/me/ep12.mp3", "durationMs": 17664, "language": "en", "createdAt": "2026-11-05T10:12:03Z", "dir": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60", "artifacts": [{"artifact": "transcript", "state": "ready", "progress": 100, "path": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60/transcript.vtt"}, {"artifact": "cues", "state": "ready", "progress": 100, "path": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60/cues.json"}], "groups": [{"groupId": "gc0001", "speakingMs": 9760, "cueCount": 4, "nearestGroupId": "gc0003", "nearestCosine": 0.1873, "label": null}, {"groupId": "gc0003", "speakingMs": 5840, "cueCount": 3, "nearestGroupId": "gc0001", "nearestCosine": 0.1873, "label": null}], "labeledShare": 0.0, "undeterminedShare": 0.0, "summaries": []}}
 ```
 
-- The source is any file ffmpeg can decode, or a direct `http(s)` link to one. podcue doesn't resolve web pages to audio. A local path is checked before any model loads or any download starts.
+- The source is any file ffmpeg can decode, or a direct `http(s)` link to one. podcue doesn't resolve web pages to audio. A local path is checked before any model loads or any download starts. A local file is stored in `episode.json` as its absolute path. A later `start` of the same audio, after the file has moved, updates that path and does not reload the models.
 - The episode id is `ep_` plus the first 16 hex characters of the sha256 of the converted 16 kHz mono WAV. The same audio always maps to the same folder.
 - Idempotent: when the folder already has `cues.json`, `start` returns it with `"created": false` and loads no model. `--language` is then ignored, and the episode keeps its first language.
+- `--fresh` recomputes that episode's transcript, cues, and automatic groups, and replaces those files in place. It does not delete other episodes, `labels.json`, summaries, or the shared model-weight cache. `--root <new dir>` is a separate tree: nothing in the old root is read, which is the other way to get a cold run.
 - A start that failed or was interrupted is rerun by the next `start` of the same audio.
 - A second `start` of the same episode while one is running exits 1 with `"reason": "running"`.
 - `--language`, for built-in ASR, is `en` (Whisper `small.en`), `de fr es it nl pl` (Whisper `small`), from the `asr` extra, or `ja ko zh` (Moonshine, from the `moonshine` extra). The default is `en`. **`ja`, `ko` and `zh` are experimental.** In testing, Moonshine dropped the opening greeting 「こんにちは。」 of a Japanese clip and returned the rest as one cue without word times.
@@ -108,7 +109,7 @@ How it works: podcue converts the audio to 16 kHz mono WAV and diarizes the whol
 This has the same shape as `start`'s `episode`. While a start is running, both artifacts show `"state": "running"` with the stage (`weights`, `diarize`, `transcribe`, `write`) and progress:
 
 ```json
-{"state": "present", "episodeId": "ep_3f9a1c2b7d4e5f60", "source": "ep12.mp3", "durationMs": 17664, "language": "en", "createdAt": "2026-11-05T10:12:03Z", "dir": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60", "artifacts": [{"artifact": "transcript", "state": "running", "stage": "transcribe", "progress": 40}, {"artifact": "cues", "state": "running", "stage": "transcribe", "progress": 40}], "summaries": []}
+{"state": "present", "episodeId": "ep_3f9a1c2b7d4e5f60", "source": "/Users/me/ep12.mp3", "durationMs": 17664, "language": "en", "createdAt": "2026-11-05T10:12:03Z", "dir": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60", "artifacts": [{"artifact": "transcript", "state": "running", "stage": "transcribe", "progress": 40}, {"artifact": "cues", "state": "running", "stage": "transcribe", "progress": 40}], "summaries": []}
 ```
 
 A failed start shows `{"state": "failed", "message": …}`. A start that was killed shows the message `start was interrupted; run start again`. `groups`, `labeledShare`, and `undeterminedShare` appear once the cues are ready. `createdAt` is the UTC time of the start that wrote the cues. A later start of audio that is already ready leaves that stamp alone. A retry after a failed or interrupted start stamps the retry, not the earlier attempt.
@@ -242,10 +243,10 @@ What it does:
 
 1. Snap each clip to cue word times (below), with a short fade.
 2. Narrate each narration segment with Kokoro at 24 kHz on CPU. The default voice is `am_michael`.
-3. Loudnorm each segment to -16 LUFS, true peak -1.5 dBTP, join them with 0.4 s of silence, loudnorm the mix, and encode it.
+3. Loudnorm each clip to -16 LUFS, true peak -1.5 dBTP. Narration is gained to that same target when Kokoro writes it, then limited so the peak stays at or under -1.5 dBTP. Join the segments with 0.4 s of silence. The mix is loudnormed only when it is already within 3 dB of -16 LUFS; a larger correction would be the late boost that lifts a quiet narration, so that mix is only peak-limited.
 4. Flag a clip under 4 seconds or over 45 seconds, a clip with no overlapping cue, a clip with a second speaker, and a clip that contains a cue whose voice is `uncertain`, `mixed`, or `undetermined`. A second speaker counts when another voice covers at least 1 second and 8% of the clip. The voice is the cue's `speaker`: after `label-groups` that is the group's label, so two groups labeled the same person are one speaker. A cue that still has its group id as `speaker` uses the label from `labels.json` when there is one. An `uncertain`, `mixed`, or `undetermined` cue is flagged even when it is shorter than that 1 second.
 
-Kokoro is imported only for a narration segment. On Python 3.13 or 3.14, or without the extra, that import exits 1 and names the 3.12 install command. The first narration downloads the Kokoro-82M weights from Hugging Face.
+Kokoro is imported only for a narration segment. On Python 3.13 or 3.14, or without the extra, that import exits 1 and names the 3.12 install command. The first narration downloads the Kokoro-82M weights from Hugging Face. English narration also needs spaCy's `en_core_web_sm` 3.8.0. That model is not on PyPI, and a direct wheel URL cannot be declared in the package metadata, so the first narration downloads the pinned wheel (sha256 `1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85`), prints one line on stderr, and installs it. A later narration in the same environment does not download it again.
 
 #### `script.json`
 
@@ -306,7 +307,7 @@ Every file is written to a temp file and renamed into place, so a reader never s
 
 | File | Schema |
 | --- | --- |
-| `episode.json` | `{episodeId, source, durationMs, language, createdAt}`. `source` is the path or URL as given. `createdAt` is ISO 8601 UTC (`…Z`) of the start that wrote the cues. |
+| `episode.json` | `{episodeId, source, durationMs, language, createdAt}`. `source` is the absolute path of a local file, or the URL as given. `createdAt` is ISO 8601 UTC (`…Z`) of the start that wrote the cues. |
 | `cues.json` | `[{id, startMs, endMs, text, groupId, speaker, nearestGroupId, nearestCosine}]` in time order. `id` is `c0001`, `c0002`, …. Times are ms from the start of the audio. `groupId` is `g` + the group's first cue id (for example `gc0001`), `ungrouped`, or `uncertain`. Before `label-groups`, `speaker` is that same id. After `label-groups`, `speaker` is the group's label (`Ada`, `quote`, `undetermined`, …). A cue pulled off a neighbor at a turn boundary keeps `speaker` `uncertain` (or `mixed` if it was marked that way). `nearestGroupId`/`nearestCosine` name the other group whose ECAPA centroid is most similar to this cue's group. Both are `null` for `ungrouped`, `uncertain`, and when there is one group. A high cosine hints that two groups are one person. |
 | `groups.json` | `[{groupId, speakingMs, cueCount, nearestGroupId, nearestCosine}]` in order of first cue. `speakingMs` is the sum of the group's cue durations. |
 | `transcript.vtt` | WebVTT. The cue identifier is the cue id, and grouped cues carry a voice tag: `c0001` / `00:00:00.080 --> 00:00:01.280` / `<v gc0001>Welcome back to the show.` |
