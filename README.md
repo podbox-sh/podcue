@@ -389,12 +389,11 @@ uv run pytest --ignore tests/test_smoke.py --ignore tests/test_start_en.py --ign
 uv run --extra moonshine pytest tests/test_smoke.py
 PODCUE_LIVE_EN=1 uv run --extra asr pytest tests/test_start_en.py
 PODCUE_LIVE_EN=1 uv run --python 3.12 --extra recap pytest tests/test_build_en.py
-# Full pipeline from the built wheel (also the CI job `stability`):
-rm -rf dist && uv build
-PODCUE="uvx --python 3.12 --from dist/podcue-0.2.6-py3-none-any.whl[recap] podcue" python3 tests/stability.py
+# Full pipeline from the built wheel (CI job `stability` runs this same file):
+python3 .cursor/skills/verify-podcue/drive.py
 ```
 
-Unit tests do not install the `asr` or `recap` extras. They stub Kokoro, the downloader, and diarization. `build` and `fetch` still need ffmpeg only when those stubs are not in place. `tests/test_start_en.py` runs a real `start` on espeak-ng speech, once with the `asr` extra and once with `--transcript`. It skips unless `PODCUE_LIVE_EN=1`. `tests/test_build_en.py` runs a real `build` with Kokoro narration and one clip and checks that the output file plays. It skips unless `PODCUE_LIVE_EN=1`. CI runs it on Python 3.12 with the `recap` extra.
+Unit tests do not install the `asr` or `recap` extras. They stub Kokoro, the downloader, and diarization. `build` and `fetch` still need ffmpeg only when those stubs are not in place. `tests/test_start_en.py` runs a real `start` on espeak-ng speech, once with the `asr` extra and once with `--transcript`. It skips unless `PODCUE_LIVE_EN=1`. `tests/test_build_en.py` runs a real `build` with Kokoro narration and one clip and checks that the output file plays. It skips unless `PODCUE_LIVE_EN=1`. CI runs it on Python 3.12 with the `recap` extra. The `stability` job runs `.cursor/skills/verify-podcue/drive.py` on every pull request and on `main`.
 
 The smoke test synthesizes a short two-voice clip and runs the whole flow through the real CLI and models: start, cues, label-groups, start-summary, post-paragraph, set-summary, summary, check. It uses macOS `say` (and expects two groups) or `espeak-ng` (whose voices usually cluster as one). It skips with the reason when ffmpeg or a synthesizer is missing.
 

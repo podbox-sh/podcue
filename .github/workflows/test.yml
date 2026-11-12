@@ -47,9 +47,7 @@ jobs:
           PODCUE_LIVE_EN: "1"
         run: uv run --python 3.12 --extra recap pytest tests/test_build_en.py -s -q
 
-  # Required end-to-end check. Runs on every pull request and on main.
-  # Installs the built wheel the way a user does, then runs fetch, start
-  # (Whisper small.en), cues, label-groups, build, and start --fresh.
+  # Same steps as .cursor/skills/verify-podcue. Runs on every pull request and on main.
   stability:
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -67,10 +65,5 @@ jobs:
           restore-keys: |
             podcue-models-
             podcue-kokoro-
-      - name: Build the wheel and run the full pipeline
-        run: |
-          rm -rf dist
-          uv build
-          wheel=$(echo dist/podcue-*-py3-none-any.whl)
-          export PODCUE="uvx --python 3.12 --from ${wheel}[recap] podcue"
-          python3 tests/stability.py
+      - name: Run verify-podcue
+        run: python3 .cursor/skills/verify-podcue/drive.py
