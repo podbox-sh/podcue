@@ -84,7 +84,7 @@ def test_group_ids_come_from_the_first_cue_and_every_row_has_its_nearest_group()
     assert [r["groupId"] for r in rows] == ["gc0001", "gc0002", "ungrouped", "gc0001"]
     assert rows[0] == {
         "id": "c0001", "startMs": 0, "endMs": 1_000, "text": "Hi.",
-        "groupId": "gc0001", "nearestGroupId": "gc0002", "nearestCosine": 0.6,
+        "groupId": "gc0001", "speaker": "gc0001", "nearestGroupId": "gc0002", "nearestCosine": 0.6,
     }
     assert (rows[1]["nearestGroupId"], rows[1]["nearestCosine"]) == ("gc0001", 0.6)
     assert (rows[2]["nearestGroupId"], rows[2]["nearestCosine"]) == (None, None)
@@ -118,3 +118,33 @@ def test_vtt_has_ids_voice_tags_and_escaped_text():
 
 def test_stamp_formats_hours():
     assert stamp(3_723_004) == "01:02:03.004"
+
+
+def test_a_short_cue_between_one_speaker_and_another_voice_is_uncertain():
+    """The guest turn covers the whole short cue, so it would join the guest. The host turn is also in it."""
+    cues = [
+        Cue("c0001", 0, 4_000, "Guest starts."),
+        Cue("c0002", 4_000, 4_800, "Right."),
+        Cue("c0003", 4_800, 9_000, "Guest continues."),
+    ]
+    tracks = Tracks(
+        turns=[Turn(0, 9_000, 0), Turn(4_000, 4_800, 1)],
+        centroids=[[1.0, 0.0], [0.0, 1.0]],
+    )
+    rows = cue_rows(cues, tracks)
+    assert [row["groupId"] for row in rows] == ["gc0001", "uncertain", "gc0001"]
+    assert rows[1]["speaker"] == "uncertain"
+    assert rows[1]["nearestGroupId"] is None and rows[1]["nearestCosine"] is None
+    assert rows[0]["speaker"] == "gc0001" and rows[2]["speaker"] == "gc0001"
+
+
+def test_a_short_cue_of_the_same_voice_stays_with_that_group():
+    cues = [
+        Cue("c0001", 0, 4_000, "A."),
+        Cue("c0002", 4_000, 5_500, "B."),
+        Cue("c0003", 5_500, 9_000, "C."),
+    ]
+    tracks = Tracks(turns=[Turn(0, 9_000, 0)], centroids=[[1.0, 0.0]])
+    rows = cue_rows(cues, tracks)
+    assert [row["speaker"] for row in rows] == ["gc0001", "gc0001", "gc0001"]
+    assert [row["groupId"] for row in rows] == ["gc0001", "gc0001", "gc0001"]

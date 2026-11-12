@@ -36,16 +36,20 @@ def test_flat_clusters_cut_at_the_threshold():
     assert labels[0] == labels[1] != labels[2] == labels[3]
 
 
-def test_cluster_unit_folds_small_clusters_into_the_nearest_large_one():
+def test_cluster_unit_folds_a_near_stray_and_keeps_a_far_one():
     rng = np.random.default_rng(0)
     a = unit_rows(np.array([1.0, 0, 0]) + rng.normal(0, 0.01, (20, 3)))
     b = unit_rows(np.array([0, 1.0, 0]) + rng.normal(0, 0.01, (20, 3)))
-    stray = unit_rows([[0.75, 0.66, 0.0]])
-    labels, centroids = cluster_unit(np.vstack([a, b, stray]))
+    near = unit_rows([[0.99, 0.02, 0.0]])
+    labels, centroids = cluster_unit(np.vstack([a, b, near]))
     assert len(centroids) == 2
+    assert labels[40] == labels[0] and labels[0] != labels[20]
+
+    far = unit_rows([[0.0, 0.0, 1.0]])
+    labels, centroids = cluster_unit(np.vstack([a, b, far]))
+    assert len(centroids) == 3
+    assert labels[40] not in (labels[0], labels[20])
     assert len(set(labels[:20])) == 1 and len(set(labels[20:40])) == 1
-    assert labels[0] != labels[20]
-    assert labels[40] in (labels[0], labels[20])
 
 
 def test_cluster_windows_ignores_windows_without_embeddings():

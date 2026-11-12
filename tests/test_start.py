@@ -4,12 +4,13 @@ import os
 import subprocess
 import sys
 import types
+import warnings
 
 import pytest
 from conftest import make_wav, run
 
 from podcue import audio, pipeline, transcribe, weights
-from podcue.cli import execute
+from podcue.cli import execute, main as cli_main
 from podcue.store import Episode, try_lock
 
 
@@ -36,7 +37,7 @@ def test_start_writes_the_folder_and_is_idempotent(engine, root, tmp_path, capsy
     assert [g["groupId"] for g in view["groups"]] == ["gc0001", "gc0002", "ungrouped"]
     assert view["groups"][0] == {"groupId": "gc0001", "speakingMs": 36_000, "cueCount": 40,
                                  "nearestGroupId": "gc0002", "nearestCosine": 0.6, "label": None}
-    assert view["labeledShare"] == 0.0 and view["summaries"] == []
+    assert view["labeledShare"] == 0.0 and view["undeterminedShare"] == 0.0 and view["summaries"] == []
 
     folder = root / "episodes" / view["episodeId"]
     assert {p.name for p in folder.iterdir()} == {
@@ -47,6 +48,7 @@ def test_start_writes_the_folder_and_is_idempotent(engine, root, tmp_path, capsy
     again, code = run(capsys, "start", wav, "--language", "de")
     assert code == 0 and again["created"] is False
     assert again["episode"]["episodeId"] == view["episodeId"] and again["episode"]["language"] == "en"
+    assert again["episode"]["createdAt"] == view["createdAt"]
     assert engine.calls == 1
 
 
@@ -87,7 +89,7 @@ def test_a_held_lock_refuses_start_before_any_model_runs(engine, root, tmp_path,
     assert "is running" in result["message"] and engine.calls == 0
 
 
-def test_a_lock_left_by_a_dead_process_is_stale_and_replaced(engine, root, tmp_path, capsys):
+def test_a_lock_left_by_a_dead_process_is_stale_and_replaced(engine, root, tmp_path, capsys, monkeypatch):
     wav = make_wav(tmp_path / "ep.wav")
     episode = Episode(root, expected_id(wav))
     episode.dir.mkdir(parents=True)
@@ -101,14 +103,16 @@ def test_a_lock_left_by_a_dead_process_is_stale_and_replaced(engine, root, tmp_p
     assert view["artifacts"][0] == {"artifact": "transcript", "state": "failed",
                                     "message": "start was interrupted; run start again"}
 
+    monkeypatch.setattr(pipeline, "now", lambda: "2026-11-11T23:53:00Z")
     result, code = run(capsys, "start", wav)
     assert code == 0 and result["created"] is True
-    assert result["episode"]["createdAt"] == "2026-11-01T00:00:00Z"
+    assert result["episode"]["createdAt"] == "2026-11-11T23:53:00Z"
     assert not episode.status.exists() and episode.start_lock.read_text() == ""
 
 
-def test_a_failed_start_writes_failed_json_and_a_later_start_retries(engine, root, tmp_path, capsys):
+def test_a_failed_start_writes_failed_json_and_a_later_start_retries(engine, root, tmp_path, capsys, monkeypatch):
     wav = make_wav(tmp_path / "ep.wav")
+    monkeypatch.setattr(pipeline, "now", lambda: "2026-11-11T19:22:00Z")
     engine.error = RuntimeError("model exploded")
     result, code = run(capsys, "start", wav)
     assert code == 1 and result == {"kind": "error", "message": "model exploded"}
@@ -123,9 +127,11 @@ def test_a_failed_start_writes_failed_json_and_a_later_start_retries(engine, roo
     cues, code = run(capsys, "cues", episode.id)
     assert code == 0 and cues == {"state": "not-ready", "episodeId": episode.id, "on": "cues"}
 
+    monkeypatch.setattr(pipeline, "now", lambda: "2026-11-11T23:53:00Z")
     engine.error = None
     result, code = run(capsys, "start", wav)
     assert code == 0 and result["created"] is True and not episode.failed.exists()
+    assert result["episode"]["createdAt"] == "2026-11-11T23:53:00Z"
 
 
 def test_a_missing_file_is_rejected_before_any_model_or_download(monkeypatch, root, tmp_path, capsys):
@@ -150,6 +156,32 @@ def test_cactus_telemetry_is_off_unless_the_user_set_it(monkeypatch, preset, exp
     monkeypatch.setitem(sys.modules, "cactus", types.ModuleType("cactus"))
     transcribe.NeedleTranscriber("en")
     assert os.environ["CACTUS_TELEMETRY"] == expected
+
+
+def test_start_silences_an_hf_token_warning(engine, root, tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    monkeypatch.delenv("HF_HUB_VERBOSITY", raising=False)
+    seen: dict[str, list[str]] = {}
+
+    def during():
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.warn("HF_TOKEN is unset; public downloads do not need one", UserWarning)
+            seen["caught"] = [str(item.message) for item in caught]
+
+    engine.during = during
+    code = cli_main(["start", str(make_wav(tmp_path / "quiet.wav"))])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert seen["caught"] == []
+    assert "HF_TOKEN" not in captured.out and "HF_TOKEN" not in captured.err
+    assert os.environ["HF_HUB_VERBOSITY"] == "error"
+
+
+def test_quiet_hub_keeps_a_verbosity_the_user_already_set(monkeypatch):
+    monkeypatch.setenv("HF_HUB_VERBOSITY", "debug")
+    transcribe.quiet_hub()
+    assert os.environ["HF_HUB_VERBOSITY"] == "debug"
 
 
 def test_usage_errors_are_one_json_line(capsys):

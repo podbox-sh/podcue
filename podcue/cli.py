@@ -26,6 +26,7 @@ from .groups import (
     merge_labels,
     page,
     parse_label_updates,
+    undetermined_share,
 )
 from .store import (
     SUMMARY_ID,
@@ -163,6 +164,7 @@ def episode_view(episode: Episode) -> dict:
         label_of = {label["groupId"]: label["label"] for label in labels}
         view["groups"] = [{**group, "label": label_of.get(group["groupId"])} for group in read_json(episode.groups)]
         view["labeledShare"] = labeled_share(load_rows(episode), labels)
+        view["undeterminedShare"] = undetermined_share(load_rows(episode), labels)
     view["summaries"] = [{"summaryId": summary_id} for summary_id in summary_ids(episode)]
     return view
 
@@ -233,7 +235,14 @@ def run_label_groups(args, root):
     with writing(episode):
         labels = merge_labels(load_labels(episode), updates)
         write_json(episode.labels, {"groups": labels})
-    return {"state": "present", "episodeId": episode.id, "labels": labels, "labeledShare": labeled_share(rows, labels)}
+    share = labeled_share(rows, labels)
+    return {
+        "state": "present",
+        "episodeId": episode.id,
+        "labels": labels,
+        "labeledShare": share,
+        "undeterminedShare": undetermined_share(rows, labels),
+    }
 
 
 def run_start_summary(args, root):

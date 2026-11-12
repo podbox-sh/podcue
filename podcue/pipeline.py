@@ -19,7 +19,7 @@ from .cues import build_cues, cue_rows, group_table, render_vtt
 from .diarize import Diarizer, Tracks
 from .regions import plan_regions
 from .store import Episode, lock_pid, read_json, release, try_lock, write_json, write_text
-from .transcribe import LANGUAGES, open_transcriber
+from .transcribe import LANGUAGES, open_transcriber, quiet_hub
 from .transcript import assign_words
 
 
@@ -79,6 +79,7 @@ def start(source: str, language: str, root: Path, transcript_words=None) -> tupl
 
     `transcript_words` skips built-in ASR. `language` is then any code, not only the built-in list.
     """
+    quiet_hub()
     if transcript_words is None and language not in LANGUAGES:
         raise Rejected("unknown-language", f"unknown language {language}; use one of {' '.join(LANGUAGES)}")
     if not language or not isinstance(language, str):
@@ -119,13 +120,15 @@ def start(source: str, language: str, root: Path, transcript_words=None) -> tupl
         try:
             report("weights", 0)  # before episode.json, so `episode` never sees a folder with neither
             episode.failed.unlink(missing_ok=True)
-            previous = read_json(episode.manifest) or {}
+            # createdAt is this run. An earlier failed start of the same audio leaves episode.json
+            # behind; reusing that stamp made a later job look hours older than it was.
+            started_at = now()
             write_json(episode.manifest, {
                 "episodeId": episode.id,
                 "source": source,
                 "durationMs": audio.duration_ms(samples),
                 "language": language,
-                "createdAt": previous.get("createdAt", now()),
+                "createdAt": started_at,
             })
             cues, tracks = transcribe(samples, language, report, transcript_words)
             report("write", 99)

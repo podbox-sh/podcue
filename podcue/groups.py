@@ -1,10 +1,12 @@
 """Speaker-group labels and the paged cue view.
 
-A label is a person's name, `undetermined`, `quote` or `ending`. A group counts as labeled
-when its label is anything but `undetermined`.
+A label is a person's name, `undetermined`, `quote` or `ending`. Only a person's name counts
+toward `labeledShare`. `undeterminedShare` is the cue time still marked `undetermined`.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 from .cues import UNGROUPED
 
@@ -48,15 +50,27 @@ def merge_labels(current: list[dict], updates: list[dict]) -> list[dict]:
 
 
 def is_labeled(label: str | None) -> bool:
-    return label is not None and label != "undetermined"
+    """A real speaker name. `undetermined`, `quote`, and `ending` are not one."""
+    return label is not None and label not in MARKS
+
+
+def _share(rows: list[dict], labels: list[dict], wanted: Callable[[str | None], bool]) -> float:
+    by_group = {label["groupId"]: label["label"] for label in labels}
+    total = sum(row["endMs"] - row["startMs"] for row in rows)
+    if total == 0:
+        return 0.0
+    matched = sum(row["endMs"] - row["startMs"] for row in rows if wanted(by_group.get(row["groupId"])))
+    return round(matched / total, 4)
 
 
 def labeled_share(rows: list[dict], labels: list[dict]) -> float:
-    """Share of total cue time (sum of endMs - startMs) whose group has a name, `quote` or `ending`."""
-    by_group = {label["groupId"]: label["label"] for label in labels}
-    total = sum(row["endMs"] - row["startMs"] for row in rows)
-    labeled = sum(row["endMs"] - row["startMs"] for row in rows if is_labeled(by_group.get(row["groupId"])))
-    return 0.0 if total == 0 else round(labeled / total, 4)
+    """Share of cue time whose group has a person's name. Marks do not count."""
+    return _share(rows, labels, is_labeled)
+
+
+def undetermined_share(rows: list[dict], labels: list[dict]) -> float:
+    """Share of cue time whose group is labeled `undetermined`."""
+    return _share(rows, labels, lambda label: label == "undetermined")
 
 
 def host_names(labels: list[dict]) -> list[str]:

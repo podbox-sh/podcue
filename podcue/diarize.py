@@ -2,8 +2,9 @@
 
 Ten-second windows every second go through the powerset segmentation model. Each local
 speaker in each window gets one ECAPA embedding. Unit-normalized embeddings are clustered
-with centroid linkage at pyannote 3.1's threshold, small clusters are folded into the nearest
-large one, and every 270-sample frame takes the cluster with the most votes.
+with centroid linkage at pyannote 3.1's threshold. A small cluster is folded into the nearest
+large one only when it is within that same distance; a farther cluster stays its own speaker.
+Every 270-sample frame takes the cluster with the most votes.
 """
 
 from __future__ import annotations
@@ -214,8 +215,11 @@ def cluster_unit(unit: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     for kid in ids[counts < min_size]:
         members = labels == kid
         centroid = unit[members].mean(axis=0)
-        nearest = int(np.argmin(np.linalg.norm(large_centroids - centroid, axis=1)))
-        labels[members] = large[nearest]
+        distances = np.linalg.norm(large_centroids - centroid, axis=1)
+        nearest = int(np.argmin(distances))
+        # A small cluster far from every large voice is a different speaker, not a fold-in.
+        if float(distances[nearest]) <= DIARIZATION_31_CENTROID_DISTANCE:
+            labels[members] = large[nearest]
     _, compact = np.unique(labels, return_inverse=True)
     compact = compact.astype(np.int32)
     speakers = int(compact.max()) + 1

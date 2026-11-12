@@ -1,6 +1,6 @@
 [project]
 name = "podcue"
-version = "0.2.1"
+version = "0.2.2"
 description = "Turn podcast audio into timed, speaker-grouped cues an agent can read."
 readme = "README.md"
 license = "MIT"
@@ -20,7 +20,7 @@ dependencies = [
 asr = ["cactus-compute==4.1.0"]
 moonshine = ["moonshine-voice==0.1.5"]
 # Kokoro 0.9.4 declares Requires-Python <3.13. The marker keeps 3.13 and 3.14 installable
-# for a transcript-only start. Narration needs `uvx --python 3.12 --from 'podcue[recap]==0.2.1'`.
+# for a transcript-only start. Narration needs `uvx --python 3.12 --from 'podcue[recap]==0.2.2'`.
 recap = [
   "cactus-compute==4.1.0",
   "kokoro==0.9.4; python_version < '3.13'",

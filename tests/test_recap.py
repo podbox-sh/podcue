@@ -23,7 +23,7 @@ from podcue.store import Episode
 
 
 def test_version_is_0_2_0():
-    assert __version__ == "0.2.1"
+    assert __version__ == "0.2.2"
 
 
 def test_importing_the_cli_does_not_load_the_recap_extra():
@@ -107,25 +107,42 @@ def test_words_are_spread_across_the_cue_and_edges_snap_to_them():
     assert (start, end, first, last) == (0.45, 10.45, 1, 2)
 
 
-def test_one_group_is_quiet_and_a_second_group_or_a_short_clip_is_flagged():
-    one = [{"startMs": 0, "endMs": 20_000, "groupId": "gc0001", "text": "all of it."}]
+def test_length_warns_only_under_4s_or_over_45s_and_an_uncertain_cue_is_flagged():
+    one = [{"startMs": 0, "endMs": 20_000, "groupId": "gc0001", "speaker": "gc0001", "text": "all of it."}]
     labels = [{"groupId": "gc0001", "label": "Ada"}]
     quiet = clip_speakers(one, labels, 0.0, 15.0)
-    assert quiet["speakers"] == 1 and clip_flags(15.0, quiet) == []
+    assert quiet["speakers"] == 1 and clip_flags(15.0, quiet, one) == []
+    assert clip_flags(4.0, quiet) == [] and clip_flags(45.0, quiet) == []
+    assert clip_flags(3.9, quiet) == ["length 3.9s under 4s"]
+    assert clip_flags(45.1, quiet) == ["length 45.1s over 45s"]
     two = [
-        {"startMs": 0, "endMs": 10_000, "groupId": "gc0001", "text": "a"},
-        {"startMs": 10_000, "endMs": 20_000, "groupId": "gc0002", "text": "b"},
+        {"startMs": 0, "endMs": 10_000, "groupId": "gc0001", "speaker": "Ada", "text": "a"},
+        {"startMs": 10_000, "endMs": 20_000, "groupId": "gc0002", "speaker": "Ben", "text": "b"},
     ]
     both = clip_speakers(two, [], 0.0, 20.0)
     assert both["speakers"] == 2
     assert clip_flags(20.0, both) == ["2 speakers in clip (other speaker 10.0s)"]
     blip = [
-        {"startMs": 0, "endMs": 15_000, "groupId": "gc0001", "text": "a"},
-        {"startMs": 15_000, "endMs": 15_400, "groupId": "gc0002", "text": "b"},
+        {"startMs": 0, "endMs": 15_000, "groupId": "gc0001", "speaker": "gc0001", "text": "a"},
+        {"startMs": 15_000, "endMs": 15_400, "groupId": "gc0002", "speaker": "gc0002", "text": "b"},
     ]
     assert clip_speakers(blip, [], 0.0, 15.4)["speakers"] == 1
-    assert clip_flags(9.9, quiet) == ["length 9.9s outside 10-20s"]
-    assert clip_flags(20.1, quiet) == ["length 20.1s outside 10-20s"]
+    slipped = [
+        {"startMs": 0, "endMs": 8_000, "groupId": "gc0001", "speaker": "gc0001", "text": "guest"},
+        {"startMs": 8_000, "endMs": 8_400, "groupId": "gc0001", "speaker": "uncertain", "text": "mm"},
+        {"startMs": 8_400, "endMs": 16_000, "groupId": "gc0001", "speaker": "gc0001", "text": "guest"},
+    ]
+    cover = clip_speakers(slipped, [], 0.0, 16.0)
+    assert cover["speakers"] == 1
+    assert clip_flags(16.0, cover, slipped) == ["uncertain or mixed speaker in clip"]
+    mixed = [{"startMs": 0, "endMs": 12_000, "groupId": "gc0001", "speaker": "mixed", "text": "both"}]
+    assert clip_flags(12.0, clip_speakers(mixed, [], 0.0, 12.0), mixed) == ["uncertain or mixed speaker in clip"]
+    same_person = [
+        {"startMs": 0, "endMs": 8_000, "groupId": "gc0001", "speaker": "gc0001", "text": "a"},
+        {"startMs": 8_000, "endMs": 16_000, "groupId": "gc0002", "speaker": "gc0002", "text": "b"},
+    ]
+    labeled = [{"groupId": "gc0001", "label": "Ada"}, {"groupId": "gc0002", "label": "Ada"}]
+    assert clip_speakers(same_person, labeled, 0.0, 16.0)["speakers"] == 1
     assert clip_flags(12.0, {"speakers": 0, "otherSeconds": 0.0}) == ["no speech in clip"]
 
 
@@ -211,7 +228,7 @@ def test_build_stitches_a_script_and_flags_a_second_speaker(episode_id, audio_op
     assert audio_ops["narrate"] == [("Intro.", "am_puck"), ("Bridge.", "af_heart")]
     assert len(audio_ops["cut"]) == 1
     assert any("speakers in clip" in flag for flag in result["flags"])
-    assert all("outside 10-20s" not in flag for flag in result["flags"])
+    assert all("under 4s" not in flag and "over 45s" not in flag for flag in result["flags"])
     report = Path(result["report"]).read_text(encoding="utf-8")
     assert "podcue recap" in report and "the guest" in report and episode_id in report
     clip = result["segments"][1]
@@ -224,13 +241,13 @@ def test_build_stitches_a_script_and_flags_a_second_speaker(episode_id, audio_op
     assert len(audio_ops["cut"]) == 1
 
 
-def test_build_flags_a_clip_outside_10_to_20_seconds(episode_id, audio_ops, tmp_path, capsys):
+def test_build_flags_a_clip_under_4_seconds(episode_id, audio_ops, tmp_path, capsys):
     script = write_script(tmp_path / "script.json", {
         "segments": [{"type": "clip", "start": 0, "end": 3, "speaker": "Ada"}],
     })
     result, code = run(capsys, "build", episode_id, script, "--out", tmp_path / "short.mp3")
     assert code == 0
-    assert any("outside 10-20s" in flag for flag in result["flags"])
+    assert any("under 4s" in flag for flag in result["flags"])
     assert audio_ops["narrate"] == []
 
 

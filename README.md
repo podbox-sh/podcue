@@ -33,11 +33,11 @@ Each write is validated when it's made, so there is no fix loop. `podcue check` 
 `fetch` and `build` need the `recap` extra. `start`, `cues`, and `label-groups` are unchanged; installing the extra is enough to run the whole recap, because the extra is a superset of the base package.
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue fetch https://example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue start ./ep/audio.wav
-uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
-uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
-uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.2" podcue fetch https://example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.2" podcue start ./ep/audio.wav
+uvx --python 3.12 --from "podcue[recap]==0.2.2" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
+uvx --python 3.12 --from "podcue[recap]==0.2.2" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
+uvx --python 3.12 --from "podcue[recap]==0.2.2" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 Pass `--python 3.12`. Kokoro 0.9.4 declares `Requires-Python: <3.13`. A direct media URL downloads without yt-dlp; a page URL needs it, from the same extra. Plain `uvx podcue` does not install the extra, so transcription stays light.
@@ -66,7 +66,7 @@ uvx podcue start ep12.mp3 --transcript transcript.json
 ```
 
 ```json
-{"kind": "started", "created": true, "episode": {"state": "present", "episodeId": "ep_3f9a1c2b7d4e5f60", "source": "ep12.mp3", "durationMs": 17664, "language": "en", "createdAt": "2026-11-05T10:12:03Z", "dir": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60", "artifacts": [{"artifact": "transcript", "state": "ready", "progress": 100, "path": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60/transcript.vtt"}, {"artifact": "cues", "state": "ready", "progress": 100, "path": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60/cues.json"}], "groups": [{"groupId": "gc0001", "speakingMs": 9760, "cueCount": 4, "nearestGroupId": "gc0003", "nearestCosine": 0.1873, "label": null}, {"groupId": "gc0003", "speakingMs": 5840, "cueCount": 3, "nearestGroupId": "gc0001", "nearestCosine": 0.1873, "label": null}], "labeledShare": 0.0, "summaries": []}}
+{"kind": "started", "created": true, "episode": {"state": "present", "episodeId": "ep_3f9a1c2b7d4e5f60", "source": "ep12.mp3", "durationMs": 17664, "language": "en", "createdAt": "2026-11-05T10:12:03Z", "dir": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60", "artifacts": [{"artifact": "transcript", "state": "ready", "progress": 100, "path": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60/transcript.vtt"}, {"artifact": "cues", "state": "ready", "progress": 100, "path": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60/cues.json"}], "groups": [{"groupId": "gc0001", "speakingMs": 9760, "cueCount": 4, "nearestGroupId": "gc0003", "nearestCosine": 0.1873, "label": null}, {"groupId": "gc0003", "speakingMs": 5840, "cueCount": 3, "nearestGroupId": "gc0001", "nearestCosine": 0.1873, "label": null}], "labeledShare": 0.0, "undeterminedShare": 0.0, "summaries": []}}
 ```
 
 - The source is any file ffmpeg can decode, or a direct `http(s)` link to one. podcue doesn't resolve web pages to audio. A local path is checked before any model loads or any download starts.
@@ -101,7 +101,7 @@ uvx podcue start ep12.mp3 --transcript transcript.json
 
 `segments` is required and non-empty. Each segment has integer `startMs`, `endMs` (greater than `startMs`), and non-empty `text`. `words` is optional. A word has the same three fields and must sit inside its segment, in time order. Segments are in time order. With no `words`, the text is split on whitespace and spread across the segment by character length. Cue text then comes from those words. `language` is required in the file unless you pass `--language`. Any code is accepted, not only the built-in list, and it is stored on the episode (compared case-insensitively: `EN` and `en` match, `en` and `en-US` do not). If the flag and the file both set a language and they differ, start exits 1 with `{"kind":"error"}`. That language is what closes a cue: `ja`, `zh`, and `ko` also close on `。！？`; every other code closes on `.`, `!`, and `?`. A word that starts outside a detected speech region is left out.
 
-How it works: podcue converts the audio to 16 kHz mono WAV and diarizes the whole episode (pyannote segmentation plus ECAPA embeddings). It joins each speaker's turns into regions, transcribes the regions in slices of up to 28 seconds (or places your transcript words into those slices), and groups the words into cues. A cue ends at sentence punctuation for the episode language, after 12 seconds, or where a speaker region ends. **Speech the diarizer misses (outside the detected speech regions) is not transcribed,** and a transcript word that starts there is left out. Each cue gets the group whose diarization turns overlap it most, or `ungrouped` when none does. Built-in ASR is not imported for `--transcript`, nor for `fetch`, `cues`, `label-groups`, `build`, or `--help`.
+How it works: podcue converts the audio to 16 kHz mono WAV and diarizes the whole episode (pyannote segmentation plus ECAPA embeddings). A small embedding cluster joins a large one only when its centroid is within the same distance the diarizer already uses to link voices; a farther cluster stays its own speaker. It joins each speaker's turns into regions, transcribes the regions in slices of up to 28 seconds (or places your transcript words into those slices), and groups the words into cues. A cue ends at sentence punctuation for the episode language, after 12 seconds, or where a speaker region ends. **Speech the diarizer misses (outside the detected speech regions) is not transcribed,** and a transcript word that starts there is left out. Each cue gets the group whose diarization turns overlap it most, or `ungrouped` when none does. A cue under 1.5 seconds that sits between two cues of one speaker, while another speaker's turn is also inside it, is moved to the `uncertain` group instead of joining that neighbor. Built-in ASR is not imported for `--transcript`, nor for `fetch`, `cues`, `label-groups`, `build`, or `--help`. No Hugging Face token is required: the model files are public pinned commits, and `start` quiets the hub's missing-token warning.
 
 ### `podcue episode <episodeId>`
 
@@ -111,12 +111,12 @@ This has the same shape as `start`'s `episode`. While a start is running, both a
 {"state": "present", "episodeId": "ep_3f9a1c2b7d4e5f60", "source": "ep12.mp3", "durationMs": 17664, "language": "en", "createdAt": "2026-11-05T10:12:03Z", "dir": "/Users/me/podcue/episodes/ep_3f9a1c2b7d4e5f60", "artifacts": [{"artifact": "transcript", "state": "running", "stage": "transcribe", "progress": 40}, {"artifact": "cues", "state": "running", "stage": "transcribe", "progress": 40}], "summaries": []}
 ```
 
-A failed start shows `{"state": "failed", "message": …}`. A start that was killed shows the message `start was interrupted; run start again`. `groups` and `labeledShare` appear once the cues are ready.
+A failed start shows `{"state": "failed", "message": …}`. A start that was killed shows the message `start was interrupted; run start again`. `groups`, `labeledShare`, and `undeterminedShare` appear once the cues are ready. `createdAt` is the UTC time of the start that wrote the cues. A later start of audio that is already ready leaves that stamp alone. A retry after a failed or interrupted start stamps the retry, not the earlier attempt.
 
 ### `podcue cues <episodeId> [--limit N] [--after CUE_ID] [--group-id GROUP_ID] [--hosts]`
 
 ```json
-{"state": "present", "episodeId": "ep_3f9a1c2b7d4e5f60", "cues": [{"id": "c0003", "startMs": 5821, "endMs": 7021, "text": "Thanks for having me.", "groupId": "gc0003", "nearestGroupId": "gc0001", "nearestCosine": 0.1873}], "hostNames": ["Ada Lovelace", "Grace Hopper"]}
+{"state": "present", "episodeId": "ep_3f9a1c2b7d4e5f60", "cues": [{"id": "c0003", "startMs": 5821, "endMs": 7021, "text": "Thanks for having me.", "groupId": "gc0003", "speaker": "gc0003", "nearestGroupId": "gc0001", "nearestCosine": 0.1873}], "hostNames": ["Ada Lovelace", "Grace Hopper"]}
 ```
 
 - `--limit` is 1 through 200. The default is 50. A page shorter than the limit is the last one.
@@ -131,12 +131,13 @@ podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovel
 ```
 
 ```json
-{"state": "present", "episodeId": "ep_3f9a1c2b7d4e5f60", "labels": [{"groupId": "gc0001", "label": "Ada Lovelace"}, {"groupId": "gc0003", "label": "Grace Hopper"}], "labeledShare": 1.0}
+{"state": "present", "episodeId": "ep_3f9a1c2b7d4e5f60", "labels": [{"groupId": "gc0001", "label": "Ada Lovelace"}, {"groupId": "gc0003", "label": "Grace Hopper"}], "labeledShare": 1.0, "undeterminedShare": 0.0}
 ```
 
 - The body is a JSON array of `{groupId, label}`. A label is a person's name, `undetermined`, `quote` (a played clip) or `ending` (a sign-off or song). Send only the groups you are changing. They are merged into `labels.json`, and the last entry for a group wins.
 - If any `groupId` is unknown, nothing is written.
-- `labeledShare` is the share of total cue time whose group has a label other than `undetermined`: the sum of `endMs - startMs` over those cues, divided by the same sum over all cues, rounded to 4 places. It's the same measure as `groups[].speakingMs`. Stop labeling at about 0.95.
+- `labeledShare` is the share of cue time whose group has a person's name. `undetermined`, `quote`, and `ending` do not count. It is the sum of `endMs - startMs` over those cues, divided by the same sum over all cues, rounded to 4 places. It's the same measure as `groups[].speakingMs`. Stop labeling at about 0.95.
+- `undeterminedShare` is that same share for groups labeled `undetermined` only. `quote` and `ending` are in neither field.
 
 ### `podcue start-summary <episodeId>`
 
@@ -208,8 +209,8 @@ It fails, listing every problem, when:
 ### `podcue fetch <URL> [--out DIR]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.2" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.2" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
 ```
 
 ```json
@@ -224,7 +225,7 @@ uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue fetch https://www.youtube
 ### `podcue build <episodeId> <script.json> [--out FILE]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.1" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.2" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 ```json
@@ -240,7 +241,7 @@ What it does:
 1. Snap each clip to cue word times (below), with a short fade.
 2. Narrate each narration segment with Kokoro at 24 kHz on CPU. The default voice is `am_michael`.
 3. Loudnorm each segment to -16 LUFS, true peak -1.5 dBTP, join them with 0.4 s of silence, loudnorm the mix, and encode it.
-4. Flag a clip whose snapped length is outside 10–20 seconds, a clip with no overlapping cue, and a clip with a second speaker. A second speaker counts when another labeled voice covers at least 1 second and 8% of the clip. Labels come from `labels.json`; an unlabeled group is named by its `groupId`. Two groups that share a label are one speaker.
+4. Flag a clip under 4 seconds or over 45 seconds, a clip with no overlapping cue, a clip with a second speaker, and a clip that contains a cue whose `speaker` is `uncertain` or `mixed`. A second speaker counts when another voice covers at least 1 second and 8% of the clip. The voice is the cue's `speaker` when that field is set, otherwise the group's label or `groupId`. Two groups that share a label are one speaker. An `uncertain` or `mixed` cue is flagged even when it is shorter than that 1 second.
 
 Kokoro is imported only for a narration segment. On Python 3.13 or 3.14, or without the extra, that import exits 1 and names the 3.12 install command. The first narration downloads the Kokoro-82M weights from Hugging Face.
 
@@ -271,7 +272,7 @@ An object, or a bare array of segments. Unknown keys are ignored.
 | `start`, `end` | clip | Seconds (`90.5` or `"90.5"`) or `[h:]mm:ss[.s]` (`"40:43.5"`, `"1:02:03"`). `end` must be after `start`. |
 | `speaker` | clip | Name written into the report. Optional. The default is `?`. |
 
-Cues are at most 12 seconds, so a 10–20 second clip spans two or three consecutive cues. `cues.json` has no per-word timestamps. Each cue's words are spread across that cue by character length, and each requested edge snaps to the nearest of those word times, then pads at most 0.25 s before the first word and 0.35 s after the last, stopping at the neighbouring word. The clip text in the report is those words. A clip that should be one speaker needs two or three consecutive cues from one group.
+Cues are at most 12 seconds, so a clip of a few seconds spans consecutive cues. `cues.json` has no per-word timestamps. Each cue's words are spread across that cue by character length, and each requested edge snaps to the nearest of those word times, then pads at most 0.25 s before the first word and 0.35 s after the last, stopping at the neighbouring word. The clip text in the report is those words. A clip that should be one speaker needs consecutive cues whose `speaker` is that person.
 
 ### `podcue fetch-weights`
 
@@ -303,8 +304,8 @@ Every file is written to a temp file and renamed into place, so a reader never s
 
 | File | Schema |
 | --- | --- |
-| `episode.json` | `{episodeId, source, durationMs, language, createdAt}`. `source` is the path or URL as given. `createdAt` is ISO 8601 UTC from the first start. |
-| `cues.json` | `[{id, startMs, endMs, text, groupId, nearestGroupId, nearestCosine}]` in time order. `id` is `c0001`, `c0002`, …. Times are ms from the start of the audio. `groupId` is `g` + the group's first cue id (for example `gc0001`), or `ungrouped`. `nearestGroupId`/`nearestCosine` name the other group whose ECAPA centroid is most similar to this cue's group. Both are `null` for `ungrouped` and when there is one group. A high cosine hints that two groups are one person. |
+| `episode.json` | `{episodeId, source, durationMs, language, createdAt}`. `source` is the path or URL as given. `createdAt` is ISO 8601 UTC (`…Z`) of the start that wrote the cues. |
+| `cues.json` | `[{id, startMs, endMs, text, groupId, speaker, nearestGroupId, nearestCosine}]` in time order. `id` is `c0001`, `c0002`, …. Times are ms from the start of the audio. `groupId` is `g` + the group's first cue id (for example `gc0001`), `ungrouped`, or `uncertain`. `speaker` is the same id, or `uncertain` when the cue was pulled off a neighbor at a turn boundary. `nearestGroupId`/`nearestCosine` name the other group whose ECAPA centroid is most similar to this cue's group. Both are `null` for `ungrouped`, `uncertain`, and when there is one group. A high cosine hints that two groups are one person. |
 | `groups.json` | `[{groupId, speakingMs, cueCount, nearestGroupId, nearestCosine}]` in order of first cue. `speakingMs` is the sum of the group's cue durations. |
 | `transcript.vtt` | WebVTT. The cue identifier is the cue id, and grouped cues carry a voice tag: `c0001` / `00:00:00.080 --> 00:00:01.280` / `<v gc0001>Welcome back to the show.` |
 | `labels.json` | `{"groups": [{groupId, label}]}` sorted by `groupId`. |
@@ -342,7 +343,7 @@ paragraphs:
 
 podcue runs locally. It uses the network only to download the input when you pass a URL to `start` or `fetch`, to download diarization weights on first use, and, with the recap extra, to download Kokoro weights the first time a narration is built. `fetch` of a page also uses the network through yt-dlp. Each direct download has a 60-second connect/read timeout, so a stalled connection fails instead of hanging.
 
-cactus-compute counts anonymous usage by default. **podcue turns that off** by setting `CACTUS_TELEMETRY=0` in its own process when `CACTUS_TELEMETRY` is unset. If you set `CACTUS_TELEMETRY` yourself, podcue leaves it alone. The same for Hugging Face when a narration loads Kokoro: `HF_HUB_DISABLE_TELEMETRY=1` unless you have set it.
+cactus-compute counts anonymous usage by default. **podcue turns that off** by setting `CACTUS_TELEMETRY=0` in its own process when `CACTUS_TELEMETRY` is unset. If you set `CACTUS_TELEMETRY` yourself, podcue leaves it alone. The same for Hugging Face when a narration loads Kokoro, and at the start of a transcription: `HF_HUB_DISABLE_TELEMETRY=1` unless you have set it. Podcue does not need `HF_TOKEN`. `start` sets the hub log level to error (unless you already set `HF_HUB_VERBOSITY`) so a missing token is not warned about. The downloads are public commits pinned by cactus-compute and by the diarization weight checksums.
 
 ## Weights and licenses
 
@@ -393,6 +394,8 @@ The smoke test synthesizes a short two-voice clip and runs the whole flow throug
 Bump `version` in `pyproject.toml` and `__version__` in `podcue/__init__.py` to the same value, then run `uv lock` so the lockfile matches. Merge that to `main`.
 
 Create a GitHub release tagged `v` plus that version, for example `v0.2.1`. Publishing the release runs [publish.yml](.github/workflows/publish.yml). It builds the sdist and wheel, checks that the built version matches the tag with a leading `v` removed, and publishes to PyPI with trusted publishing. The workflow stores no PyPI token. Running the workflow by hand (`workflow_dispatch`) publishes the selected commit the same way, without the tag check.
+
+0.2.2 is the package version on this branch. It is not tagged and not published. See [CHANGELOG.md](CHANGELOG.md). Clip length is flagged only under 4 seconds or over 45 seconds. A short cue at a speaker boundary can be `uncertain`. `labeledShare` counts person names only, and `undeterminedShare` is reported beside it. `createdAt` is the UTC time of the start that wrote the cues.
 
 0.2.1 moves built-in speech-to-text to the `asr` extra (`cactus-compute` 4.1.0, whose engine download is pinned to a commit) and adds `podcue start --transcript` for a model's own timed words. The transcript object is `{"language", "segments": [{startMs, endMs, text, words?}]}`.
 
