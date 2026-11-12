@@ -1,16 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.2.5
 
-Not a version bump.
+Not tagged and not published. The package metadata is `0.2.5`.
 
-- `episode.json` `source` for a local file is the absolute path. A later `start` of the same audio updates that path when the file has moved.
-- `start --fresh` recomputes one episode's transcript, cues, and groups. Other episodes, user labels, summaries, and the shared weight cache stay. `--root` with a new directory is a separate cold run.
-- English narration downloads the pinned spaCy `en_core_web_sm` 3.8.0 wheel and says so on stderr. It is not a PyPI dependency. Narration is gained to -16 LUFS when it is synthesized and limited to -1.5 dBTP. The mix does not apply a boost larger than 3 dB. Torch deprecation warnings from Kokoro are filtered.
+- A local file is stored in `episode.json` as its absolute path. A later `start` of the same audio updates that path when the file has moved.
+- The first English narration downloads the pinned spaCy `en_core_web_sm` 3.8.0 wheel and says so on stderr. It is not a PyPI dependency.
+- Narration is gained to -16 LUFS when it is synthesized and limited to -1.5 dBTP. The mix does not apply a boost larger than 3 dB. Torch deprecation warnings from Kokoro are filtered.
+- `start --fresh` recomputes one episode's transcript, cues, and groups, and moves `labels.json` to `labels.prev.json` (replacing any older prev) so labels are done again. Other episodes, summaries, and the shared weight cache stay. `--root` with a new directory is a separate cold run.
 
 ## 0.2.4
-
-Not tagged and not published. The package metadata is `0.2.4`.
 
 Built-in speech-to-text for `en de fr es it nl pl` is Whisper small through faster-whisper 1.2.1, on CPU at int8. English uses `Systran/faster-whisper-small.en` at commit `d1d751a5f8271d482d14ca55d9e2deeebbae577f`. The other six languages use `Systran/faster-whisper-small` at `536b0662742c02347bc0e980a01041f333bce120`. `model.bin` is checked by size and SHA-256. `ja`, `ko`, and `zh` stay on Moonshine. cactus-compute is no longer a dependency.
 

@@ -79,18 +79,43 @@ def test_fresh_recomputes_one_episode_and_keeps_the_rest(engine, root, tmp_path,
     first, _ = run(capsys, "start", first_wav)
     other, _ = run(capsys, "start", other_wav)
     episode = Episode(root, first["episode"]["episodeId"])
-    episode.labels.write_text('{"groups": [{"groupId": "gc0001", "label": "Ada"}]}')
-    other_cues = (root / "episodes" / other["episode"]["episodeId"] / "cues.json").read_bytes()
+    other_episode = Episode(root, other["episode"]["episodeId"])
+    other_episode.labels.write_text('{"groups": [{"groupId": "gc0001", "label": "Other"}]}')
+    (episode.dir / "labels.prev.json").write_text("OLDER")
+    labeled, code = run(capsys, "label-groups", first["episode"]["episodeId"],
+                        '[{"groupId": "gc0001", "label": "Ada"}]')
+    assert code == 0 and labeled["labeledShare"] > 0
+    cache = episode.dir / "recap-cache"
+    cache.mkdir()
+    (cache / "tts_keep.wav").write_bytes(b"RIFFkeep")
+    page, _ = run(capsys, "cues", first["episode"]["episodeId"], "--limit", "1")
+    assert page["cues"][0]["speaker"] == "Ada"
+    other_cues = (other_episode.dir / "cues.json").read_bytes()
     monkeypatch.setattr(pipeline, "now", lambda: "2026-11-12T05:31:00Z")
     fresh, code = run(capsys, "start", first_wav, "--fresh")
     assert code == 0 and fresh["created"] is True
     assert fresh["episode"]["createdAt"] == "2026-11-12T05:31:00Z"
     assert fresh["episode"]["source"] == str(first_wav.resolve())
+    assert fresh["episode"]["labeledShare"] == 0.0
+    assert fresh["episode"]["groups"][0]["label"] is None
     assert engine.calls == 3
-    assert "Ada" in episode.labels.read_text()
-    assert (root / "episodes" / other["episode"]["episodeId"] / "cues.json").read_bytes() == other_cues
+    assert not episode.labels.exists()
+    assert "Ada" in episode.labels_prev.read_text()
+    assert "OLDER" not in episode.labels_prev.read_text()
+    assert (cache / "tts_keep.wav").read_bytes() == b"RIFFkeep"
+    page, _ = run(capsys, "cues", first["episode"]["episodeId"], "--limit", "1")
+    assert page["cues"][0]["speaker"] == page["cues"][0]["groupId"]
+    assert other_episode.labels.read_text() == '{"groups": [{"groupId": "gc0001", "label": "Other"}]}'
+    assert (other_episode.dir / "cues.json").read_bytes() == other_cues
     assert marker.read_text() == "keep"
     assert episode.cues.is_file() and episode.transcript.is_file()
+
+    episode.labels.write_text('{"groups": [{"groupId": "gc0002", "label": "Ben"}]}')
+    again, code = run(capsys, "start", first_wav, "--fresh")
+    assert code == 0 and again["created"] is True
+    assert not episode.labels.exists()
+    assert "Ben" in episode.labels_prev.read_text()
+    assert "Ada" not in episode.labels_prev.read_text()
 
 
 def test_root_flag_beats_podcue_home(engine, root, tmp_path, capsys):

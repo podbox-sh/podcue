@@ -89,7 +89,8 @@ def build_parser() -> Parser:
     start.add_argument("--transcript", metavar="FILE",
                        help='JSON {"language", "segments": [{startMs, endMs, text, words?}]} instead of built-in ASR')
     start.add_argument("--fresh", action="store_true",
-                       help="recompute this episode's transcript, cues, and groups; "
+                       help="recompute this episode's transcript, cues, and groups, and move "
+                            "labels.json to labels.prev.json so labels are redone; "
                             "other episodes and the model cache stay")
 
     command("episode", "status, groups, labels and summaries of an episode").add_argument("episodeId")

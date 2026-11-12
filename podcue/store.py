@@ -38,6 +38,7 @@ class Episode:
         self.cues = self.dir / "cues.json"
         self.groups = self.dir / "groups.json"
         self.labels = self.dir / "labels.json"
+        self.labels_prev = self.dir / "labels.prev.json"
         self.status = self.dir / "status.json"
         self.failed = self.dir / "failed.json"
         self.start_lock = self.dir / "start.lock"
@@ -132,6 +133,18 @@ def summary_ids(episode: Episode) -> list[str]:
 
 def load_rows(episode: Episode) -> list[dict]:
     return read_json(episode.cues)
+
+
+def retire_labels(episode: Episode) -> None:
+    """Move labels.json onto labels.prev.json so a fresh start labels from scratch.
+
+    `os.replace` overwrites an older prev in one step. Clip and narration files in
+    recap-cache are keyed on the source audio and the text, not on these labels, so
+    they stay; `build` reads labels at run time and will not reuse the retired names.
+    """
+    if not episode.labels.is_file():
+        return
+    os.replace(episode.labels, episode.labels_prev)
 
 
 def load_labels(episode: Episode) -> list[dict]:

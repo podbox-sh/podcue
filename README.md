@@ -33,11 +33,11 @@ Each write is validated when it's made, so there is no fix loop. `podcue check` 
 `fetch` and `build` need the `recap` extra. `start`, `cues`, and `label-groups` are unchanged; installing the extra is enough to run the whole recap, because the extra is a superset of the base package.
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue fetch https://example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue start ./ep/audio.wav
-uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
-uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
-uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue fetch https://example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue start ./ep/audio.wav
+uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
+uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
+uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 Pass `--python 3.12`. Kokoro 0.9.4 declares `Requires-Python: <3.13`. A direct media URL downloads without yt-dlp; a page URL needs it, from the same extra. Plain `uvx podcue` does not install the extra, so transcription stays light.
@@ -72,7 +72,7 @@ uvx podcue start ep12.mp3 --transcript transcript.json
 - The source is any file ffmpeg can decode, or a direct `http(s)` link to one. podcue doesn't resolve web pages to audio. A local path is checked before any model loads or any download starts. A local file is stored in `episode.json` as its absolute path. A later `start` of the same audio, after the file has moved, updates that path and does not reload the models.
 - The episode id is `ep_` plus the first 16 hex characters of the sha256 of the converted 16 kHz mono WAV. The same audio always maps to the same folder.
 - Idempotent: when the folder already has `cues.json`, `start` returns it with `"created": false` and loads no model. `--language` is then ignored, and the episode keeps its first language.
-- `--fresh` recomputes that episode's transcript, cues, and automatic groups, and replaces those files in place. It does not delete other episodes, `labels.json`, summaries, or the shared model-weight cache. `--root <new dir>` is a separate tree: nothing in the old root is read, which is the other way to get a cold run.
+- `--fresh` recomputes that episode's transcript, cues, and automatic groups, and replaces those files in place. It moves `labels.json` to `labels.prev.json` (replacing any older prev) so the episode is labeled again from scratch. Other episodes, summaries, and the shared model-weight cache stay. Narration and clip wavs in `recap-cache` are keyed on the text and the source audio, not on labels, so they are kept; the next `build` reads the new cues and the empty label set. `--root <new dir>` is a separate tree: nothing in the old root is read, which is the other way to get a cold run.
 - A start that failed or was interrupted is rerun by the next `start` of the same audio.
 - A second `start` of the same episode while one is running exits 1 with `"reason": "running"`.
 - `--language`, for built-in ASR, is `en` (Whisper `small.en`), `de fr es it nl pl` (Whisper `small`), from the `asr` extra, or `ja ko zh` (Moonshine, from the `moonshine` extra). The default is `en`. **`ja`, `ko` and `zh` are experimental.** In testing, Moonshine dropped the opening greeting 「こんにちは。」 of a Japanese clip and returned the rest as one cue without word times.
@@ -212,8 +212,8 @@ It fails, listing every problem, when:
 ### `podcue fetch <URL> [--out DIR]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
 ```
 
 ```json
@@ -228,7 +228,7 @@ uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue fetch https://www.youtube
 ### `podcue build <episodeId> <script.json> [--out FILE]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.4" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.5" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 ```json
@@ -293,7 +293,8 @@ This is optional. It downloads the two pinned diarization weight files now inste
   transcript.vtt      \
   groups.json          } written when the start succeeds; cues.json last, so it marks the episode ready
   cues.json           /
-  labels.json         written by label-groups
+  labels.json         written by label-groups; start --fresh renames it to labels.prev.json
+  labels.prev.json    the labels.json replaced by the latest --fresh
   summaries/
     sm_8c41d07e2a9b3f15.yaml
   recap-cache/        narration and clip wavs reused by a later build of the same segment
@@ -398,7 +399,9 @@ Bump `version` in `pyproject.toml` and `__version__` in `podcue/__init__.py` to 
 
 Create a GitHub release tagged `v` plus that version, for example `v0.2.1`. Publishing the release runs [publish.yml](.github/workflows/publish.yml). It builds the sdist and wheel, checks that the built version matches the tag with a leading `v` removed, and publishes to PyPI with trusted publishing. The workflow stores no PyPI token. Running the workflow by hand (`workflow_dispatch`) publishes the selected commit the same way, without the tag check.
 
-0.2.4 is the package version on this branch. It is not tagged and not published. See [CHANGELOG.md](CHANGELOG.md). Built-in ASR for `en de fr es it nl pl` is Whisper small (faster-whisper). `ja`, `ko`, and `zh` stay on Moonshine.
+0.2.5 is the package version on this branch. It is not tagged and not published. See [CHANGELOG.md](CHANGELOG.md). A local source path is stored absolute, English narration downloads a pinned spaCy model and is leveled when it is synthesized, and `start --fresh` moves `labels.json` aside.
+
+0.2.4 switches built-in ASR for `en de fr es it nl pl` to Whisper small (faster-whisper). `ja`, `ko`, and `zh` stay on Moonshine.
 
 0.2.3, which is released, writes each cue's `speaker` from its group label and lets `label-groups` name every group that sits inside a cue range.
 

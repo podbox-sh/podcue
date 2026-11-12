@@ -19,7 +19,7 @@ from . import audio, weights
 from .cues import build_cues, cue_rows, group_table, render_vtt
 from .diarize import Diarizer, Tracks
 from .regions import plan_regions
-from .store import Episode, lock_pid, read_json, release, try_lock, write_json, write_text
+from .store import Episode, lock_pid, read_json, release, retire_labels, try_lock, write_json, write_text
 from .transcribe import LANGUAGES, open_transcriber, quiet_hub
 from .transcript import assign_words
 
@@ -95,7 +95,8 @@ def start(source: str, language: str, root: Path, transcript_words=None, fresh: 
     """Returns the episode and whether this call wrote its cues. Raises Rejected or the failure.
 
     `transcript_words` skips built-in ASR. `language` is then any code, not only the built-in list.
-    `fresh` ignores the saved transcript, cues, and groups for this episode only.
+    `fresh` ignores the saved transcript, cues, and groups for this episode only,
+    and moves labels.json to labels.prev.json.
     """
     quiet_hub()
     if transcript_words is None and language not in LANGUAGES:
@@ -152,6 +153,8 @@ def start(source: str, language: str, root: Path, transcript_words=None, fresh: 
                 "createdAt": started_at,
             })
             cues, tracks = transcribe(samples, language, report, transcript_words)
+            if fresh:
+                retire_labels(episode)
             report("write", 99)
             rows = cue_rows(cues, tracks)
             write_text(episode.transcript, render_vtt(rows))
