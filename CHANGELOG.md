@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.2.4
 
-Built-in speech-to-text for `en de fr es it nl pl` is Whisper small through faster-whisper 1.2.1, on CPU at int8. English uses `Systran/faster-whisper-small.en` at commit `d1d751a5f8271d482d14ca55d9e2deeebbae577f`. The other six languages use `Systran/faster-whisper-small` at `536b0662742c02347bc0e980a01041f333bce120`. `model.bin` is checked by size and SHA-256. `ja`, `ko`, and `zh` stay on Moonshine. cactus-compute is no longer a dependency. The package version is still 0.2.3; this change is not tagged.
+Not tagged and not published. The package metadata is `0.2.4`.
+
+Built-in speech-to-text for `en de fr es it nl pl` is Whisper small through faster-whisper 1.2.1, on CPU at int8. English uses `Systran/faster-whisper-small.en` at commit `d1d751a5f8271d482d14ca55d9e2deeebbae577f`. The other six languages use `Systran/faster-whisper-small` at `536b0662742c02347bc0e980a01041f333bce120`. `model.bin` is checked by size and SHA-256. `ja`, `ko`, and `zh` stay on Moonshine. cactus-compute is no longer a dependency.
 
 ## 0.2.3
 
