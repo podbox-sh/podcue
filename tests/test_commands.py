@@ -20,6 +20,7 @@ def test_cues_pages_fifty_by_default_and_continues_after_a_cue(episode_id, capsy
     assert set(page["cues"][0]) == {
         "id", "startMs", "endMs", "text", "groupId", "speaker", "nearestGroupId", "nearestCosine",
     }
+    assert page["cues"][0]["speaker"] == page["cues"][0]["groupId"]
     assert "hostNames" not in page
     page, _ = run(capsys, "cues", episode_id, "--after", "c0050")
     assert ids(page["cues"])[0] == "c0051" and len(page["cues"]) == 50
@@ -85,6 +86,11 @@ def test_label_groups_merges_and_reports_labeled_share(episode_id, root, capsys)
     view, _ = run(capsys, "episode", episode_id)
     assert [g["label"] for g in view["groups"]] == ["Ana", "undetermined", "ending"]
     assert view["labeledShare"] == 0.3333 and view["undeterminedShare"] == 0.3333
+    page, _ = run(capsys, "cues", episode_id, "--limit", "200")
+    by_id = {cue["id"]: cue for cue in page["cues"]}
+    assert by_id["c0001"]["groupId"] == "gc0001" and by_id["c0001"]["speaker"] == "Ana"
+    assert by_id["c0002"]["groupId"] == "gc0002" and by_id["c0002"]["speaker"] == "undetermined"
+    assert by_id["c0003"]["groupId"] == "ungrouped" and by_id["c0003"]["speaker"] == "ending"
 
 
 def test_quote_does_not_count_as_a_labeled_speaker(episode_id, capsys):
@@ -96,7 +102,8 @@ def test_quote_does_not_count_as_a_labeled_speaker(episode_id, capsys):
                                   '[{"groupId": "gc0001"}]', "not json"])
 def test_label_groups_rejects_a_bad_body(episode_id, capsys, body):
     assert run(capsys, "label-groups", episode_id, body) == (
-        {"kind": "error", "message": "label-groups expects a JSON array of { groupId, label }"}, 1)
+        {"kind": "error", "message":
+         "label-groups expects a JSON array of { groupId, label } or { fromCue, toCue, label }"}, 1)
 
 
 def test_label_groups_reports_an_unknown_group_and_writes_nothing(episode_id, root, capsys):
@@ -104,6 +111,56 @@ def test_label_groups_reports_an_unknown_group_and_writes_nothing(episode_id, ro
                        '[{"groupId": "gc0001", "label": "A"}, {"groupId": "gx", "label": "B"}]')
     assert (result, code) == ({"state": "unknown", "episodeId": episode_id, "groupId": "gx"}, 0)
     assert not Episode(root.resolve(), episode_id).labels.exists()
+
+
+def test_a_cue_range_labels_every_group_that_sits_inside_it(episode_id, capsys):
+    # Each fixture group spans the episode, so a short window contains none of them wholly.
+    result, code = run(capsys, "label-groups", episode_id,
+                       '[{"fromCue": "c0004", "toCue": "c0006", "label": "quote"}]')
+    assert code == 0 and result["labels"] == []
+    page, _ = run(capsys, "cues", episode_id, "--limit", "1")
+    assert page["cues"][0]["speaker"] == "gc0001"
+
+    result, code = run(capsys, "label-groups", episode_id,
+                       '[{"fromCue": "c0001", "toCue": "c0120", "label": "quote"}]')
+    assert code == 0 and result["labels"] == [
+        {"groupId": "gc0001", "label": "quote"},
+        {"groupId": "gc0002", "label": "quote"},
+        {"groupId": "ungrouped", "label": "quote"},
+    ]
+    assert result["labeledShare"] == 0.0 and result["undeterminedShare"] == 0.0
+    page, _ = run(capsys, "cues", episode_id, "--limit", "3")
+    assert [cue["speaker"] for cue in page["cues"]] == ["quote", "quote", "quote"]
+    assert [cue["groupId"] for cue in page["cues"]] == ["gc0001", "gc0002", "ungrouped"]
+
+    result, _ = run(capsys, "label-groups", episode_id, '[{"groupId": "gc0001", "label": "Ada"}]')
+    assert {"groupId": "gc0001", "label": "Ada"} in result["labels"]
+    page, _ = run(capsys, "cues", episode_id, "--limit", "1")
+    assert page["cues"][0]["speaker"] == "Ada" and page["cues"][0]["groupId"] == "gc0001"
+
+
+def test_a_range_with_an_unknown_cue_writes_nothing(episode_id, root, capsys):
+    result, code = run(capsys, "label-groups", episode_id,
+                       '[{"fromCue": "c9999", "toCue": "c0003", "label": "quote"}]')
+    assert (result, code) == ({"state": "unknown", "episodeId": episode_id, "cueId": "c9999"}, 0)
+    assert not Episode(root.resolve(), episode_id).labels.exists()
+    result, code = run(capsys, "label-groups", episode_id,
+                       '[{"fromCue": "c0001", "toCue": "c9999", "label": "quote"}]')
+    assert result["cueId"] == "c9999" and code == 0
+    assert not Episode(root.resolve(), episode_id).labels.exists()
+
+
+def test_a_backwards_cue_range_is_rejected(episode_id, root, capsys):
+    result, code = run(capsys, "label-groups", episode_id,
+                       '[{"fromCue": "c0006", "toCue": "c0004", "label": "quote"}]')
+    assert code == 1 and result["kind"] == "error" and "c0006" in result["message"] and "c0004" in result["message"]
+    assert not Episode(root.resolve(), episode_id).labels.exists()
+
+
+def test_an_entry_cannot_be_a_group_and_a_range(episode_id, capsys):
+    body = '[{"groupId": "gc0001", "fromCue": "c0001", "toCue": "c0002", "label": "quote"}]'
+    result, code = run(capsys, "label-groups", episode_id, body)
+    assert code == 1 and result["kind"] == "error" and "fromCue" in result["message"]
 
 
 # summaries

@@ -1,8 +1,21 @@
 # Changelog
 
+## 0.2.3
+
+Not tagged and not published. The package metadata is `0.2.3`.
+
+- After `label-groups`, each cue's `speaker` is the label of its group (`Ada`, `quote`, `undetermined`, …). `groupId` is unchanged. Before any label, `speaker` is still the group id. A cue that is `uncertain` or `mixed` keeps that speaker when the group is labeled.
+- `build` compares those `speaker` values. Two groups labeled the same person are one speaker. A cue whose speaker is `uncertain`, `mixed`, or `undetermined` flags the clip even when it is shorter than 1 second and 8% of the clip. A 0.2.2 cues file, where `speaker` is still the group id, still uses `labels.json` for that comparison.
+- `label-groups` accepts `{"fromCue", "toCue", "label"}` beside the existing `{groupId, label}`. The range assigns that label to every group whose cues all fall inside the inclusive cue-id window. A group with a cue outside the window is not changed. That is one entry for a countdown that diarization split into many tiny quote groups, without labeling the host who continues past the window. `uncertain` and `mixed` are not selected by a range.
+- The Hugging Face missing-token warning is silenced for every command, not only `start`. `quiet_hub` runs at the command entry and again immediately before Kokoro imports the hub.
+
+### JSON
+
+No fields were added or removed. `speaker` on a cue already existed. After `label-groups` its value is the group's label instead of a copy of `groupId`. `uncertain` and `mixed` are unchanged. The `label-groups` request accepts a second object shape; the response is the same `{labels, labeledShare, undeterminedShare}`.
+
 ## 0.2.2
 
-Not tagged and not published. The package metadata is `0.2.2`.
+Released.
 
 - `build` flags a clip only when its snapped length is under 4 seconds or over 45 seconds. A clip between those lengths is not a length flag. Flags still exit 0.
 - A cue under 1.5 seconds that sits between two cues of one speaker, while another diarization speaker's turn overlaps it, is placed in the `uncertain` group. It no longer inherits the neighbor's group.

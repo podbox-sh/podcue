@@ -2,18 +2,23 @@
 
 A label is a person's name, `undetermined`, `quote` or `ending`. Only a person's name counts
 toward `labeledShare`. `undeterminedShare` is the cue time still marked `undetermined`.
+
+`label-groups` can name one group, or every group whose cues sit entirely inside a cue id
+range. Afterward each cue's `speaker` is that label. Before any label it is the group id.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from .cues import UNGROUPED
+from .cues import HELD_SPEAKERS, UNGROUPED
 
 MARKS = ("undetermined", "quote", "ending")
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
-LABEL_SHAPE = "label-groups expects a JSON array of { groupId, label }"
+LABEL_SHAPE = (
+    "label-groups expects a JSON array of { groupId, label } or { fromCue, toCue, label }"
+)
 
 
 class Unknown(Exception):
@@ -24,18 +29,99 @@ class Unknown(Exception):
         self.fields = fields
 
 
+class BadRange(Exception):
+    """`fromCue` sits after `toCue` in the episode. Nothing is written."""
+
+    def __init__(self, from_cue: str, to_cue: str):
+        super().__init__(f"fromCue {from_cue} is after toCue {to_cue}")
+        self.from_cue = from_cue
+        self.to_cue = to_cue
+
+
+def _label_text(item: dict) -> str | None:
+    label = item.get("label")
+    if not isinstance(label, str) or not label:
+        return None
+    return label
+
+
 def parse_label_updates(value: object) -> list[dict] | None:
+    """Each entry names one group, or a cue range that expands to the groups inside it."""
     if not isinstance(value, list):
         return None
     updates = []
     for item in value:
         if not isinstance(item, dict):
             return None
-        group_id, label = item.get("groupId"), item.get("label")
-        if not isinstance(group_id, str) or not group_id or not isinstance(label, str) or not label:
+        label = _label_text(item)
+        if label is None:
             return None
-        updates.append({"groupId": group_id, "label": label})
+        has_group = "groupId" in item
+        has_range = "fromCue" in item or "toCue" in item
+        if has_group == has_range:
+            return None
+        if has_group:
+            group_id = item.get("groupId")
+            if not isinstance(group_id, str) or not group_id:
+                return None
+            updates.append({"groupId": group_id, "label": label})
+            continue
+        from_cue, to_cue = item.get("fromCue"), item.get("toCue")
+        if not isinstance(from_cue, str) or not from_cue or not isinstance(to_cue, str) or not to_cue:
+            return None
+        updates.append({"fromCue": from_cue, "toCue": to_cue, "label": label})
     return updates
+
+
+def groups_wholly_inside(rows: list[dict], from_cue: str, to_cue: str) -> list[str]:
+    """Groups whose every cue id lies in the inclusive range.
+
+    A group with one cue outside the range is left alone. `uncertain` and `mixed` are not
+    labels you can paint on with a range; those cues keep their speaker.
+    """
+    order = [row["id"] for row in rows]
+    if from_cue not in order:
+        raise Unknown(cueId=from_cue)
+    if to_cue not in order:
+        raise Unknown(cueId=to_cue)
+    start, end = order.index(from_cue), order.index(to_cue)
+    if start > end:
+        raise BadRange(from_cue, to_cue)
+    window = set(order[start : end + 1])
+    members: dict[str, set[str]] = {}
+    for row in rows:
+        members.setdefault(row["groupId"], set()).add(row["id"])
+    return sorted(
+        group_id
+        for group_id, cue_ids in members.items()
+        if group_id not in HELD_SPEAKERS and cue_ids <= window
+    )
+
+
+def resolve_label_updates(rows: list[dict], updates: list[dict]) -> list[dict]:
+    """Expand ranges to `{groupId, label}` entries. Later entries still win in `merge_labels`."""
+    resolved: list[dict] = []
+    for update in updates:
+        if "groupId" in update:
+            resolved.append({"groupId": update["groupId"], "label": update["label"]})
+            continue
+        for group_id in groups_wholly_inside(rows, update["fromCue"], update["toCue"]):
+            resolved.append({"groupId": group_id, "label": update["label"]})
+    return resolved
+
+
+def assign_speakers(rows: list[dict], labels: list[dict]) -> None:
+    """Put each group's label on `speaker`. Before any label, `speaker` stays the group id.
+
+    `uncertain` and `mixed` are left alone, including when the group they sit in is labeled.
+    """
+    by_group = {item["groupId"]: item["label"] for item in labels}
+    for row in rows:
+        speaker = row.get("speaker") or row["groupId"]
+        if speaker in HELD_SPEAKERS or row["groupId"] in HELD_SPEAKERS:
+            row["speaker"] = speaker if speaker in HELD_SPEAKERS else row["groupId"]
+            continue
+        row["speaker"] = by_group.get(row["groupId"], row["groupId"])
 
 
 def known_groups(rows: list[dict]) -> set[str]:

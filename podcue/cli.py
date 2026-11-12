@@ -19,15 +19,19 @@ from .groups import (
     DEFAULT_LIMIT,
     LABEL_SHAPE,
     MAX_LIMIT,
+    BadRange,
     Unknown,
+    assign_speakers,
     host_names,
     known_groups,
     labeled_share,
     merge_labels,
     page,
     parse_label_updates,
+    resolve_label_updates,
     undetermined_share,
 )
+from .transcribe import quiet_hub
 from .store import (
     SUMMARY_ID,
     Episode,
@@ -228,13 +232,19 @@ def run_label_groups(args, root):
         raise Failure(LABEL_SHAPE)
     episode = _episode(root, args.episodeId)
     rows = _ready(episode)
+    try:
+        resolved = resolve_label_updates(rows, updates)
+    except BadRange as error:
+        raise Failure(str(error)) from None
     known = known_groups(rows)
-    for update in updates:
+    for update in resolved:
         if update["groupId"] not in known:
             raise Unknown(groupId=update["groupId"])
     with writing(episode):
-        labels = merge_labels(load_labels(episode), updates)
+        labels = merge_labels(load_labels(episode), resolved)
+        assign_speakers(rows, labels)
         write_json(episode.labels, {"groups": labels})
+        write_json(episode.cues, rows)
     share = labeled_share(rows, labels)
     return {
         "state": "present",
@@ -362,6 +372,8 @@ def execute(argv: list[str]) -> tuple[dict, int]:
     from .recap import RecapError
     from .summary import Invalid
 
+    # One call covers every command, including build, before any Hugging Face import.
+    quiet_hub()
     episode_id = None
     try:
         args = build_parser().parse_args(argv)
