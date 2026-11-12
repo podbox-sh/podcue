@@ -2,7 +2,8 @@
 
 The episode id is `ep_` + the first 16 hex digits of the sha256 of the converted WAV, so the
 same audio always lands in the same folder. When that folder already has cues.json, start
-returns it without loading a model.
+returns it without loading a model, and updates `source` to the path it was given this time.
+`--fresh` recomputes that one episode and leaves every other episode and the weight cache.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from . import audio, weights
 from .cues import build_cues, cue_rows, group_table, render_vtt
 from .diarize import Diarizer, Tracks
 from .regions import plan_regions
-from .store import Episode, lock_pid, read_json, release, try_lock, write_json, write_text
+from .store import Episode, lock_pid, read_json, release, retire_labels, try_lock, write_json, write_text
 from .transcribe import LANGUAGES, open_transcriber, quiet_hub
 from .transcript import assign_words
 
@@ -74,10 +75,28 @@ def transcribe(samples, language: str, report, transcript_words=None) -> tuple[l
     return build_cues(results, language), tracks
 
 
-def start(source: str, language: str, root: Path, transcript_words=None) -> tuple[Episode, bool]:
+def recorded_source(source: str) -> str:
+    """A local file is stored as an absolute path. A URL is stored as given."""
+    if audio.is_url(source):
+        return source
+    return str(Path(source).expanduser().resolve())
+
+
+def refresh_source(episode: Episode, recorded: str) -> None:
+    """Point an existing episode at the file this start was given. Other fields stay."""
+    manifest = read_json(episode.manifest)
+    if not isinstance(manifest, dict) or manifest.get("source") == recorded:
+        return
+    manifest["source"] = recorded
+    write_json(episode.manifest, manifest)
+
+
+def start(source: str, language: str, root: Path, transcript_words=None, fresh: bool = False) -> tuple[Episode, bool]:
     """Returns the episode and whether this call wrote its cues. Raises Rejected or the failure.
 
     `transcript_words` skips built-in ASR. `language` is then any code, not only the built-in list.
+    `fresh` ignores the saved transcript, cues, and groups for this episode only,
+    and moves labels.json to labels.prev.json.
     """
     quiet_hub()
     if transcript_words is None and language not in LANGUAGES:
@@ -89,6 +108,7 @@ def start(source: str, language: str, root: Path, transcript_words=None) -> tupl
         local = Path(source).expanduser()
         if not local.is_file():
             raise Rejected("not-found", f"{source} is not a file")
+    recorded = recorded_source(source)
 
     with tempfile.TemporaryDirectory(prefix="podcue-") as scratch:
         scratch_dir = Path(scratch)
@@ -98,7 +118,8 @@ def start(source: str, language: str, root: Path, transcript_words=None) -> tupl
         log("converting to 16 kHz mono WAV")
         audio.to_wav(local, wav)
         episode = Episode(root, "ep_" + sha256_file(wav)[:16])
-        if episode.ready():
+        if episode.ready() and not fresh:
+            refresh_source(episode, recorded)
             return episode, False
         samples = audio.read_wav(wav)
     if len(samples) == 0:
@@ -109,7 +130,8 @@ def start(source: str, language: str, root: Path, transcript_words=None) -> tupl
     if fd is None:
         raise Rejected("running", f"another start of {episode.id} is running (pid {lock_pid(episode.start_lock)})")
     try:
-        if episode.ready():
+        if episode.ready() and not fresh:
+            refresh_source(episode, recorded)
             return episode, False
         state = {"stage": ""}
 
@@ -125,12 +147,14 @@ def start(source: str, language: str, root: Path, transcript_words=None) -> tupl
             started_at = now()
             write_json(episode.manifest, {
                 "episodeId": episode.id,
-                "source": source,
+                "source": recorded,
                 "durationMs": audio.duration_ms(samples),
                 "language": language,
                 "createdAt": started_at,
             })
             cues, tracks = transcribe(samples, language, report, transcript_words)
+            if fresh:
+                retire_labels(episode)
             report("write", 99)
             rows = cue_rows(cues, tracks)
             write_text(episode.transcript, render_vtt(rows))

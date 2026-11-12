@@ -13,11 +13,15 @@ from podcue.cli import main as cli_main
 from podcue.fetch import download_with_ytdlp, is_direct_media
 from podcue.recap import (
     RecapError,
+    SPACY_MODEL,
     clip_flags,
     clip_speakers,
+    ensure_spacy_model,
     narrate,
+    narration_loudness_filter,
     parse_script,
     parse_ts,
+    quiet_torch,
     resolve_voice,
     snap,
     words_from_cues,
@@ -26,7 +30,7 @@ from podcue.store import Episode
 
 
 def test_version_is_0_2_0():
-    assert __version__ == "0.2.4"
+    assert __version__ == "0.2.5"
 
 
 def test_importing_the_cli_does_not_load_the_recap_extra():
@@ -175,6 +179,67 @@ def test_length_warns_only_under_4s_or_over_45s_and_an_uncertain_cue_is_flagged(
     labeled = [{"groupId": "gc0001", "label": "Ada"}, {"groupId": "gc0002", "label": "Ada"}]
     assert clip_speakers(same_person, labeled, 0.0, 16.0)["speakers"] == 1
     assert clip_flags(12.0, {"speakers": 0, "otherSeconds": 0.0}) == ["no speech in clip"]
+
+
+def test_narration_gain_targets_the_mix_and_limits_the_peak():
+    text = narration_loudness_filter(-27.5)
+    assert "volume=11.50dB" in text
+    assert "alimiter=limit=0.8414" in text
+    assert "level=false" in text
+
+
+def test_quiet_torch_ignores_torch_deprecations_only():
+    quiet_torch()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        quiet_torch()
+        warnings.warn_explicit(
+            "torch.nn.utils.weight_norm is deprecated",
+            DeprecationWarning,
+            filename="torch/nn/utils/weight_norm.py",
+            lineno=1,
+            module="torch.nn.utils.weight_norm",
+        )
+        warnings.warn_explicit(
+            "something else is deprecated",
+            DeprecationWarning,
+            filename="podcue/recap.py",
+            lineno=1,
+            module="podcue.recap",
+        )
+    messages = [str(item.message) for item in caught]
+    assert not any("weight_norm" in message for message in messages)
+    assert any("something else" in message for message in messages)
+
+
+def test_a_missing_spacy_model_is_announced_and_unpacked(monkeypatch, tmp_path, capsys):
+    import podcue.recap as recap
+
+    wheel = tmp_path / "model.whl"
+    import zipfile
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("en_core_web_sm-3.8.0.dist-info/METADATA", "Name: en-core-web-sm\nVersion: 3.8.0\n")
+        archive.writestr("en_core_web_sm/__init__.py", "")
+    calls = {"n": 0}
+
+    def installed():
+        calls["n"] += 1
+        return calls["n"] >= 3
+
+    monkeypatch.setattr(recap, "_spacy_installed", installed)
+    monkeypatch.setattr(recap, "ensure", lambda pin: wheel)
+    dest = tmp_path / "site"
+    monkeypatch.setattr(recap.sysconfig, "get_path", lambda _name: str(dest))
+    ensure_spacy_model()
+    err = capsys.readouterr().err
+    assert "installing spaCy model en_core_web_sm 3.8.0" in err
+    assert (dest / "en_core_web_sm" / "__init__.py").is_file()
+    assert "en_core_web_sm 3.8.0" in SPACY_MODEL.label
+    assert SPACY_MODEL.sha256 == "1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85"
+    assert "github.com/explosion/spacy-models" in SPACY_MODEL.url
+    capsys.readouterr()
+    ensure_spacy_model()
+    assert capsys.readouterr().err == ""
 
 
 def test_narrate_names_the_recap_extra_when_kokoro_is_absent(monkeypatch, tmp_path):

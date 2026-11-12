@@ -30,7 +30,7 @@ def test_start_writes_the_folder_and_is_idempotent(engine, root, tmp_path, capsy
     view = first["episode"]
     assert view["episodeId"] == expected_id(wav)
     assert view["dir"] == str(root / "episodes" / view["episodeId"])
-    assert (view["source"], view["durationMs"], view["language"]) == (str(wav), 1_000, "en")
+    assert (view["source"], view["durationMs"], view["language"]) == (str(wav.resolve()), 1_000, "en")
     assert [(a["artifact"], a["state"], a["progress"]) for a in view["artifacts"]] == [
         ("transcript", "ready", 100), ("cues", "ready", 100)]
     assert [g["groupId"] for g in view["groups"]] == ["gc0001", "gc0002", "ungrouped"]
@@ -49,6 +49,73 @@ def test_start_writes_the_folder_and_is_idempotent(engine, root, tmp_path, capsy
     assert again["episode"]["episodeId"] == view["episodeId"] and again["episode"]["language"] == "en"
     assert again["episode"]["createdAt"] == view["createdAt"]
     assert engine.calls == 1
+
+
+def test_a_moved_file_refreshes_the_stored_source(engine, root, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "src").mkdir()
+    wav = make_wav(tmp_path / "src" / "audio.wav")
+    first, code = run(capsys, "start", "src/audio.wav")
+    assert code == 0 and first["episode"]["source"] == str(wav.resolve())
+    moved = tmp_path / "later" / "audio.wav"
+    moved.parent.mkdir()
+    wav.replace(moved)
+    again, code = run(capsys, "start", "later/audio.wav")
+    assert code == 0 and again["created"] is False
+    assert again["episode"]["source"] == str(moved.resolve())
+    assert again["episode"]["createdAt"] == first["episode"]["createdAt"]
+    assert engine.calls == 1
+
+
+def test_fresh_recomputes_one_episode_and_keeps_the_rest(engine, root, tmp_path, monkeypatch, capsys):
+    from podcue.store import Episode
+    from podcue.weights import cache_dir
+
+    marker = cache_dir() / "weights" / "keep.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("keep")
+    first_wav = make_wav(tmp_path / "a.wav", seed=1)
+    other_wav = make_wav(tmp_path / "b.wav", seed=2)
+    first, _ = run(capsys, "start", first_wav)
+    other, _ = run(capsys, "start", other_wav)
+    episode = Episode(root, first["episode"]["episodeId"])
+    other_episode = Episode(root, other["episode"]["episodeId"])
+    other_episode.labels.write_text('{"groups": [{"groupId": "gc0001", "label": "Other"}]}')
+    (episode.dir / "labels.prev.json").write_text("OLDER")
+    labeled, code = run(capsys, "label-groups", first["episode"]["episodeId"],
+                        '[{"groupId": "gc0001", "label": "Ada"}]')
+    assert code == 0 and labeled["labeledShare"] > 0
+    cache = episode.dir / "recap-cache"
+    cache.mkdir()
+    (cache / "tts_keep.wav").write_bytes(b"RIFFkeep")
+    page, _ = run(capsys, "cues", first["episode"]["episodeId"], "--limit", "1")
+    assert page["cues"][0]["speaker"] == "Ada"
+    other_cues = (other_episode.dir / "cues.json").read_bytes()
+    monkeypatch.setattr(pipeline, "now", lambda: "2026-11-12T05:31:00Z")
+    fresh, code = run(capsys, "start", first_wav, "--fresh")
+    assert code == 0 and fresh["created"] is True
+    assert fresh["episode"]["createdAt"] == "2026-11-12T05:31:00Z"
+    assert fresh["episode"]["source"] == str(first_wav.resolve())
+    assert fresh["episode"]["labeledShare"] == 0.0
+    assert fresh["episode"]["groups"][0]["label"] is None
+    assert engine.calls == 3
+    assert not episode.labels.exists()
+    assert "Ada" in episode.labels_prev.read_text()
+    assert "OLDER" not in episode.labels_prev.read_text()
+    assert (cache / "tts_keep.wav").read_bytes() == b"RIFFkeep"
+    page, _ = run(capsys, "cues", first["episode"]["episodeId"], "--limit", "1")
+    assert page["cues"][0]["speaker"] == page["cues"][0]["groupId"]
+    assert other_episode.labels.read_text() == '{"groups": [{"groupId": "gc0001", "label": "Other"}]}'
+    assert (other_episode.dir / "cues.json").read_bytes() == other_cues
+    assert marker.read_text() == "keep"
+    assert episode.cues.is_file() and episode.transcript.is_file()
+
+    episode.labels.write_text('{"groups": [{"groupId": "gc0002", "label": "Ben"}]}')
+    again, code = run(capsys, "start", first_wav, "--fresh")
+    assert code == 0 and again["created"] is True
+    assert not episode.labels.exists()
+    assert "Ben" in episode.labels_prev.read_text()
+    assert "Ada" not in episode.labels_prev.read_text()
 
 
 def test_root_flag_beats_podcue_home(engine, root, tmp_path, capsys):
