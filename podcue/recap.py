@@ -568,8 +568,11 @@ def narrate(text: str, voice: str, dest: Path) -> None:
     if not pieces:
         raise RecapError("Kokoro returned no audio")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    raw = dest.with_name(dest.name + ".raw")
-    sf.write(str(raw), np.concatenate(pieces), SAMPLE_RATE)
+    # A ".raw" name makes soundfile pick major format RAW, which has no default
+    # subtype and raises "No default subtype for major format 'raw'". WAV with an
+    # explicit PCM_16 subtype is what ffmpeg reads for the loudness pass.
+    raw = dest.with_name(dest.name + ".wav")
+    sf.write(str(raw), np.concatenate(pieces), SAMPLE_RATE, format="WAV", subtype="PCM_16")
     try:
         measured = _finite(measure_loudness(raw)["input_i"])
         if measured is None:
