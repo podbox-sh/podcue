@@ -1,6 +1,6 @@
 """Cue-range labels and the speaker field, with a countdown split into tiny groups."""
 
-from podcue.groups import assign_speakers, groups_wholly_inside, resolve_label_updates
+from podcue.groups import apply_label_updates, assign_speakers, groups_wholly_inside, resolve_label_updates
 
 
 def countdown():
@@ -76,3 +76,31 @@ def test_a_label_does_not_replace_an_uncertain_cue_inside_a_named_group():
     assert [row["speaker"] for row in rows] == ["Ada", "uncertain", "Ada"]
     assign_speakers(rows, [{"groupId": "gc0001", "label": "Ben"}])
     assert [row["speaker"] for row in rows] == ["Ben", "uncertain", "Ben"]
+
+
+def test_cue_scope_paints_only_the_window_and_a_later_group_wins():
+    rows = [
+        {"id": "c0001", "groupId": "ghost", "speaker": "ghost"},
+        {"id": "c0002", "groupId": "gq", "speaker": "gq"},
+        {"id": "c0003", "groupId": "ghost", "speaker": "ghost"},
+        {"id": "c0004", "groupId": "uncertain", "speaker": "uncertain"},
+    ]
+    # The host group recurs after the montage, so a group-scoped range does not label it.
+    assert groups_wholly_inside(rows, "c0001", "c0002") == ["gq"]
+    groups, cues = apply_label_updates(rows, [], [], [
+        {"groupId": "ghost", "label": "Nora"},
+        {"fromCue": "c0001", "toCue": "c0002", "label": "quote", "scope": "cues"},
+    ])
+    assert groups == [{"groupId": "ghost", "label": "Nora"}]
+    assert cues == [{"id": "c0001", "label": "quote"}, {"id": "c0002", "label": "quote"}]
+    assign_speakers(rows, groups, cues)
+    assert [row["speaker"] for row in rows] == ["quote", "quote", "Nora", "uncertain"]
+
+    groups, cues = apply_label_updates(rows, groups, cues, [
+        {"groupId": "ghost", "label": "Ada"},
+    ])
+    assign_speakers(rows, groups, cues)
+    assert groups == [{"groupId": "ghost", "label": "Ada"}]
+    assert {item["id"] for item in cues} == {"c0002"}
+    assert rows[0]["speaker"] == "Ada" and rows[2]["speaker"] == "Ada"
+    assert rows[1]["speaker"] == "quote" and rows[3]["speaker"] == "uncertain"

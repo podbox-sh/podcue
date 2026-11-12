@@ -81,6 +81,7 @@ def test_transcript_language_can_be_outside_the_builtin_list(engine, root, tmp_p
     result, code = run(capsys, "start", make_wav(tmp_path / "ep.wav"), "--transcript", path)
     assert code == 0, result
     assert result["episode"]["language"] == "pt"
+    assert result["episode"]["asr"] == {"engine": "external", "model": None, "revision": None}
 
 
 def test_flag_supplies_the_language_when_the_file_omits_it(engine, root, tmp_path, capsys):

@@ -62,6 +62,27 @@ def sentence_end(language: str) -> re.Pattern[str]:
     return _LATIN_END
 
 
+def join_cue_text(tokens: list[str]) -> str:
+    """Join tokens, keeping spaces between words and gluing number punctuation.
+
+    A token that starts with `,` `.` `%` or similar attaches to the previous token, and a
+    digit token attaches when the previous token already ends in `,` or `.`. `400` + `,000`
+    becomes `400,000`, and `2` + `.4%` becomes `2.4%`. Ordinary words stay separated.
+    """
+    text = ""
+    for token in tokens:
+        if not token:
+            continue
+        if not text:
+            text = token
+            continue
+        if token[0] in ",.;:!?%)]}'\"\u2019\u201d" or (token[0].isdigit() and text[-1] in ",."):
+            text += token
+        else:
+            text += " " + token
+    return text
+
+
 def build_cues(results: list[tuple[Slice, list[Word]]], language: str = "en") -> list[Cue]:
     """Keep each word that starts inside its slice's keep window, then group words into cues.
 
@@ -76,7 +97,7 @@ def build_cues(results: list[tuple[Slice, list[Word]]], language: str = "en") ->
     def close() -> None:
         nonlocal bucket
         if bucket:
-            text = " ".join(word for _, _, word in bucket)
+            text = join_cue_text([word for _, _, word in bucket])
             cues.append(Cue(cue_id(len(cues)), bucket[0][0], bucket[-1][1], text))
             bucket = []
 

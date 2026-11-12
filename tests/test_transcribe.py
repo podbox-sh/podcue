@@ -180,6 +180,14 @@ def test_moonshine_line_without_word_times_becomes_one_word():
     assert moonshine_words(lines) == [Word("こんにちは。", 1.0, 1.5), Word("x", 3.1, 3.4)]
 
 
-def test_unknown_language_is_refused():
+def test_asr_record_names_whisper_moonshine_and_an_external_transcript():
+    from podcue.transcribe import WHISPER_EN, WHISPER_MULTI, asr_record
+    assert asr_record("en", False) == {
+        "engine": "faster-whisper", "model": WHISPER_EN.repo, "revision": WHISPER_EN.revision,
+    }
+    assert asr_record("de", False)["model"] == WHISPER_MULTI.repo
+    assert asr_record("ja", False) == {"engine": "moonshine", "model": "moonshine", "revision": "tiny"}
+    assert asr_record("zh", False)["revision"] == "base"
+    assert asr_record("pt", True) == {"engine": "external", "model": None, "revision": None}
     with pytest.raises(ValueError, match="unsupported language"):
         open_transcriber("xx")
