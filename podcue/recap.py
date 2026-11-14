@@ -767,7 +767,9 @@ def render_report(episode_id: str, source: Path, dest: Path, duration_s: float, 
         f"- Final loudness: {lufs:.1f} LUFS, true peak {true_peak:.1f} dBTP",
         f"- Flags: {len(flags)}",
         "",
-        "Clip edges are the cue word times the requested range snapped to. "
+        "Clip edges are the cue word times the requested range snapped to. A clip starts 50 ms before its first word "
+        "and never inside the previous word. Its end pads past the last word, cuts where the audio goes quiet, "
+        "and stops 30 ms before the next word. "
         "A clip under 4 seconds or over 45 seconds is flagged, as is an uncertain, mixed, or undetermined cue.",
         "",
         "| # | type | speaker | voice | range | length | LUFS in→out | flags |",

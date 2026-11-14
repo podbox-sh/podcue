@@ -35,6 +35,7 @@ Preconditions:
 
 - A narration file saved as `.raw` fails the build with `{"kind":"error","message":"No default subtype for major format 'raw'"}` before any mp3 exists. The proof is a playable `recap.mp3`, not a successful-looking log line from earlier commands.
 - Flags for a short or long clip are warnings. They stay in `flags` and the command still exits 0. An empty snap or a missing source file is `kind: error` and exit 1.
+- A clip's `end` can be later than its last cue's `endMs`. That is the 200 ms tail pad (`--tail-pad-ms`) plus the snap to quiet, and it keeps the end of the last word. The length flags read that padded length.
 - `report.md` is written next to `--out`, which may be outside the episode directory. Copy it out before deleting `--root`.
 - The first narration downloads Kokoro weights and the pinned spaCy model. A later build in the same environment does not. The doctor report may show those caches as absent on a cold machine.
 - Python 3.13 or 3.14 exits 1 and names the 3.12 install command. Do not treat that message as a Kokoro audio failure.

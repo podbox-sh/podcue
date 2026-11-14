@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.8
+
+Not tagged and not published. The package metadata is `0.2.8`.
+
+- A clip's end pads 200 ms past its last word. `build --tail-pad-ms MS` sets the pad, and `0` turns it off.
+- From the padded end, the cut looks up to 400 ms further for the first 20 ms window that is 25 dB under the clip's level. The clip ends at that window.
+- The end always stops 30 ms before the next word starts.
+- The start is 50 ms before the first word and never before the previous word ends.
+- Clips fade in over 10 ms and out over 40 ms. Clip edges are kept to the millisecond.
+- The under 4 s and over 45 s flags read the padded length.
+- The pad is no longer clamped to the clip's own cue end. A cue ends at Whisper's last-word end, which lands before the sound stops, so that clamp gave every clip ending on a cue no tail at all. The clamp to an adjacent cue of another speaker is gone too. That cue's first word is the next word, so the 30 ms guard keeps the clip out of it.
+
 ## 0.2.7
 
 Not tagged and not published. The package metadata is `0.2.7`.
