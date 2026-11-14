@@ -35,5 +35,5 @@ Preconditions:
 - `start` returns immediately when `cues.json` already exists. Resume is only visible when that file is missing.
 - A checkpoint slice whose bounds do not match the new plan is transcribed again. Do not assert that every old index was skipped.
 - A lock a live process still holds is `another start ... is running`. Age and the pid text do not make it free.
-- The holder removes the lock file when it finishes. Do not delete locks by killing a process named `podcue`.
+- The lock file stays when the holder finishes. Its mtime is not read, so a laptop sleeping does not free a flock a process still holds. A child that inherited the fd is a live holder until that child exits. Do not delete locks by killing a process named `podcue`.
 - The full `verify-podcue` drive deletes its `--root`, so it does not leave a checkpoint to resume. This feature is checked by the unit tests, not by that drive.

@@ -1,7 +1,9 @@
 """A fake engine for command tests: WAV inputs are "converted" by copying, and the models are
 replaced by a fixed set of 120 cues in three groups (gc0001, gc0002, ungrouped)."""
 
+import fcntl
 import json
+import os
 import shutil
 import wave
 
@@ -26,6 +28,19 @@ def make_wav(path, seed=0):
         writer.setframerate(16_000)
         writer.writeframes(samples.tobytes())
     return path
+
+
+def assert_lock_released(path):
+    """The lock file stays, and no process holds its flock."""
+    if not path.exists():
+        raise AssertionError(f"{path.name} should stay after the command finishes")
+    fd = os.open(path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        raise AssertionError(f"{path.name} is still held") from error
+    finally:
+        os.close(fd)
 
 
 def run(capsys, *argv):

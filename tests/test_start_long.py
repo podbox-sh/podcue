@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import run
+from conftest import assert_lock_released, run
 
 pytestmark = pytest.mark.slow
 
@@ -80,6 +80,6 @@ def test_a_long_file_with_silent_gaps_starts(tmp_path, monkeypatch, capsys):
     assert started["episode"]["durationMs"] >= 200_000
     assert started["episode"]["asr"]["engine"] == "faster-whisper"
     episode = Path(started["episode"]["dir"])
-    assert not (episode / "start.lock").exists()
+    assert_lock_released(episode / "start.lock")
     assert not (episode / "write.lock").exists()
     assert not (episode / "slices.json").exists()

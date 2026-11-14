@@ -48,5 +48,5 @@ dev = [
 
 [tool.pytest.ini_options]
 markers = [
-    "slow: real start on several minutes of audio; run in the stability job",
+    "slow: long start and the lock repro scripts; run in the stability job",
 ]

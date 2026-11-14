@@ -10,7 +10,7 @@ import time
 import warnings
 
 import pytest
-from conftest import make_wav, run
+from conftest import assert_lock_released, make_wav, run
 
 from podcue import audio, pipeline, transcribe, weights
 from podcue.cli import execute, main as cli_main
@@ -48,8 +48,8 @@ def test_start_writes_the_folder_and_is_idempotent(engine, root, tmp_path, capsy
 
     folder = root / "episodes" / view["episodeId"]
     assert {p.name for p in folder.iterdir()} == {
-        "episode.json", "transcript.vtt", "cues.json", "groups.json"}
-    assert not (folder / "start.lock").exists()
+        "episode.json", "transcript.vtt", "cues.json", "groups.json", "start.lock"}
+    assert_lock_released(folder / "start.lock")
     assert not (folder / "write.lock").exists()
     assert "<v gc0001>line 1." in (folder / "transcript.vtt").read_text()
 
@@ -182,7 +182,8 @@ def test_a_lock_left_by_a_dead_process_is_stale_and_replaced(engine, root, tmp_p
     result, code = run(capsys, "start", wav)
     assert code == 0 and result["created"] is True
     assert result["episode"]["createdAt"] == "2026-11-11T23:53:00Z"
-    assert not episode.status.exists() and not episode.start_lock.exists()
+    assert not episode.status.exists()
+    assert_lock_released(episode.start_lock)
 
 
 def test_a_failed_start_writes_failed_json_and_a_later_start_retries(engine, root, tmp_path, capsys, monkeypatch):
@@ -195,7 +196,8 @@ def test_a_failed_start_writes_failed_json_and_a_later_start_retries(engine, roo
     failed = json.loads(episode.failed.read_text())
     assert failed["message"] == "model exploded" and failed["stage"] == "diarize"
     assert not episode.status.exists() and not episode.cues.exists()
-    assert not episode.start_lock.exists() and not episode.write_lock.exists()
+    assert_lock_released(episode.start_lock)
+    assert not episode.write_lock.exists()
 
     view, _ = run(capsys, "episode", episode.id)
     assert view["artifacts"][1] == {"artifact": "cues", "state": "failed", "message": "model exploded"}
@@ -334,7 +336,7 @@ def test_a_lock_file_left_by_a_dead_process_does_not_block(engine, root, tmp_pat
     assert code == 0, captured.out
     assert f"replacing start.lock left by pid {pid}" in captured.err
     assert engine.calls == 1
-    assert not lock.exists()
+    assert_lock_released(lock)
 
 
 def test_writers_do_not_overlap_after_the_lock_file_is_removed(tmp_path):
@@ -373,7 +375,7 @@ def test_a_write_lock_left_by_a_dead_process_is_replaced(tmp_path, capsys):
     with writing(episode):
         assert episode.write_lock.read_text().strip() == str(os.getpid())
     assert f"replacing write.lock left by pid {pid}" in capsys.readouterr().err
-    assert not episode.write_lock.exists()
+    assert_lock_released(episode.write_lock)
 
 
 def _hold_lock(path, ready):
@@ -504,13 +506,13 @@ def test_unknown_episode(root, capsys):
     assert run(capsys, "cues", "../../etc")[0]["state"] == "unknown"
 
 
-def test_write_lock_is_removed_when_the_command_finishes(tmp_path):
+def test_write_lock_is_released_when_the_command_finishes(tmp_path):
     episode = Episode(tmp_path, "ep_" + "ab" * 8)
     episode.dir.mkdir(parents=True)
     with writing(episode):
         assert episode.write_lock.is_file()
-    assert not episode.write_lock.exists()
+    assert_lock_released(episode.write_lock)
     with pytest.raises(RuntimeError, match="failed write"):
         with writing(episode):
             raise RuntimeError("failed write")
-    assert not episode.write_lock.exists()
+    assert_lock_released(episode.write_lock)

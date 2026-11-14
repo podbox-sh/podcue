@@ -301,12 +301,12 @@ This is optional. It downloads the two pinned diarization weight files now inste
   recap-cache/        narration and clip wavs reused by a later build of the same segment
   status.json         only while a start runs; removed when it ends
   failed.json         only after a failed start; removed by the next start
-  start.lock          only while a start runs; removed when the command finishes
-  write.lock          only while a label or summary write runs; removed when it finishes
+  start.lock          flock while a start runs; the file stays after it finishes
+  write.lock          flock while a label or summary write runs; the file stays after it finishes
   slices.json         transcription checkpoint; removed when cues.json is written
 ```
 
-Every file is written to a temp file and renamed into place, so a reader never sees half a file. The only coordination is the two lock files. `start.lock` is held with `flock` and holds the pid. `write.lock` is held the same way for one label or summary write. Both files are removed when the command finishes, including when it fails. A crash drops the flock with the process and can leave the file. The next command locks that same path and, when the file names a pid that is not running, logs that it is replacing it. A flock a live process still holds is refused, including when the file is old or the pid written in it is gone. `slices.json` records each finished transcription slice so a killed `start` continues there. `start --fresh` deletes that file first.
+Every file is written to a temp file and renamed into place, so a reader never sees half a file. The only coordination is the two lock files. `start.lock` is held with `flock` and holds the pid. `write.lock` is held the same way for one label or summary write. The files stay after the command finishes, including when it fails. Removing them would let a new process lock a new inode while another process still held the old one. A crash drops the flock when the last process with that fd exits. The next command locks the same file and, when it names a pid that is not running, logs that it is replacing it. A flock a live process still holds is refused. The file's mtime is not read, so hours of runtime or a laptop sleeping do not make it free. A child that inherited the fd is that live holder until the child exits. `episode` reports a start as running only when `status.json` names a live pid that matches `start.lock`. `slices.json` records each finished transcription slice so a killed `start` continues there. `start --fresh` deletes that file first.
 
 | File | Schema |
 | --- | --- |
@@ -404,7 +404,7 @@ Bump `version` in `pyproject.toml` and `__version__` in `podcue/__init__.py` to 
 
 Create a GitHub release tagged `v` plus that version, for example `v0.2.1`. Publishing the release runs [publish.yml](.github/workflows/publish.yml). It builds the sdist and wheel, checks that the built version matches the tag with a leading `v` removed, and publishes to PyPI with trusted publishing. The workflow stores no PyPI token. Running the workflow by hand (`workflow_dispatch`) publishes the selected commit the same way, without the tag check.
 
-0.2.7 is the package version on this branch. It is not tagged and not published. See [CHANGELOG.md](CHANGELOG.md). A Whisper slice with no alignment frames is skipped, `slices.json` lets `start` resume, and a stale lock is taken over. `av` 18.1.0 stays installed next to faster-whisper 1.2.1.
+0.2.7 is the package version on this branch. It is not tagged and not published. See [CHANGELOG.md](CHANGELOG.md). A Whisper slice with no alignment frames is skipped, `slices.json` lets `start` resume, and lock files stay in place so the flock is the only lock. `av` 18.1.0 stays installed next to faster-whisper 1.2.1.
 
 0.2.6 writes narration as 16-bit WAV, removes lock files when a command finishes, and keeps Kokoro's torch warnings off during `build`.
 

@@ -1,10 +1,11 @@
 """The episode folder. Every piece of state lives in a file here; there is no other process.
 
 Writes go through a temp file plus rename, so a reader never sees half a file. `start.lock`
-holds the pid of the running start under an flock and is removed when that command finishes,
-including when it fails. A crash drops the flock with the process, so the next command locks
-that same path. The file is removed only by the process that holds it, and only while the
-lock still names the path. Read-modify-write commands hold `write.lock` the same way.
+and `write.lock` are flocks. The files stay after the command finishes. Removing one would
+let a new flock succeed on a new inode while another process, including a child that
+inherited the fd, still held the old one. A crash drops the flock with the last process
+that had the fd, and the next command locks the same file. Whether a start is running is
+`status.json` plus a live pid, not the presence of the lock file.
 """
 
 from __future__ import annotations
@@ -96,33 +97,19 @@ def _pid_on_fd(fd: int) -> int | None:
     return int(text) if text.isdigit() else None
 
 
-def _locks_the_path(fd: int, path: Path) -> bool:
-    """True when `fd` still refers to the file at `path`.
-
-    flock follows the inode. A holder can unlink the path after another process
-    has opened it and before that process flocks. The flock then succeeds on an
-    unlinked inode, and a third process can lock a new file at the same path.
-    """
-    try:
-        current = os.stat(path)
-    except FileNotFoundError:
-        return False
-    held = os.fstat(fd)
-    return held.st_ino == current.st_ino and held.st_dev == current.st_dev
-
-
 def _lock_nb(path: Path) -> int | None:
-    """Lock the file at `path`, or return None while a live holder has it."""
-    while True:
-        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            os.close(fd)
-            return None
-        if _locks_the_path(fd, path):
-            return fd
+    """Lock the file at `path`, or return None while a live holder has it.
+
+    The file's age is not consulted. A long start, or a laptop that slept, does
+    not make this fail open.
+    """
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
         os.close(fd)
+        return None
+    return fd
 
 
 def try_lock(path: Path) -> int | None:
@@ -130,7 +117,9 @@ def try_lock(path: Path) -> int | None:
 
     A pid left in the file does not grant the lock. The flock does. When this
     process gets the flock and the file still names a dead pid, that is a crash
-    leftover and it is logged.
+    leftover and it is logged. A child that inherited the fd is a live holder
+    until it exits. The pid in the file can be the dead parent, and that does
+    not make the lock free.
     """
     fd = _lock_nb(path)
     if fd is None:
@@ -143,28 +132,10 @@ def try_lock(path: Path) -> int | None:
 
 
 def release(fd: int, path: Path) -> None:
-    """Drop a lock this process holds and remove its file."""
-    _remove_lock(fd, path)
-
-
-def _remove_lock(fd: int, path: Path) -> None:
-    """Unlink `path` while `fd` still holds it, then close `fd`.
-
-    The inode check leaves a newer lock file alone if one replaced this one.
-    """
-    try:
-        held = os.fstat(fd)
-        current = os.stat(path)
-    except OSError:
-        os.close(fd)
-        return
-    try:
-        if held.st_ino == current.st_ino and held.st_dev == current.st_dev:
-            os.unlink(path)
-    except FileNotFoundError:
-        pass
-    finally:
-        os.close(fd)
+    """Drop the flock and leave `path` where it is."""
+    os.close(fd)
+    if not path.exists():
+        _note(f"{path.name} disappeared while its lock was released")
 
 
 def lock_pid(path: Path) -> int | None:
@@ -188,11 +159,7 @@ def pid_alive(pid: int) -> bool:
 
 @contextlib.contextmanager
 def writing(episode: Episode):
-    """Serialize read-modify-write calls on one episode.
-
-    Wait by trying again. A blocking flock stays on an unlinked inode after the
-    holder removes the path, so the next writer could lock a new file as well.
-    """
+    """Serialize read-modify-write calls on one episode."""
     while True:
         fd = try_lock(episode.write_lock)
         if fd is not None:
@@ -201,7 +168,7 @@ def writing(episode: Episode):
     try:
         yield
     finally:
-        _remove_lock(fd, episode.write_lock)
+        release(fd, episode.write_lock)
 
 
 def summary_ids(episode: Episode) -> list[str]:

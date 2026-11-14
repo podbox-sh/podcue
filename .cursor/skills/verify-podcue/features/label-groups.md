@@ -7,7 +7,7 @@
 - `label-apply` accepts one `{groupId, label}` entry and returns `state: present`.
 - `label-name` counts a person's name in `labeledShare`.
 - `label-held` does not relabel a group whose id is `uncertain` or `mixed`.
-- `label-locks` leaves no `write.lock` after the command exits.
+- `label-locks` leaves `write.lock` unheld after the command exits. The file stays.
 
 ## How to get to it (user POV)
 
@@ -23,7 +23,7 @@ Preconditions:
 - The chosen `groupId` is not `uncertain` or `mixed` when any other group exists. `ungrouped` is used only when it is the only group.
 
 - **Apply a name.** Run `podcue --root <root> label-groups <episodeId> '[{"groupId":"<groupId>","label":"John Greenman"}]'`. Exit 0. `state` is `present`. `labels` contains that group id and `John Greenman`.
-- **Proof.** Save stdout to `verify-podcue-evidence/label-groups.json`. The episode directory contains no `write.lock` or `start.lock`.
+- **Proof.** Save stdout to `verify-podcue-evidence/label-groups.json`. `start.lock` and `write.lock` may remain. Nothing holds either flock.
 
 ## Gotchas
 

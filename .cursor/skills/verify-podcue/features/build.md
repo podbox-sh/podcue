@@ -9,7 +9,7 @@
 - `build-file` writes `recap.mp3` that ffprobe can time.
 - `build-lufs` leaves each narration segment within 2 LU of -16 LUFS.
 - `build-report` writes `report.md` next to the mp3.
-- `build-locks` leaves no `*.lock` file after the command exits.
+- `build-locks` leaves any `*.lock` file unheld after the command exits. The files stay.
 
 ## How to get to it (user POV)
 
