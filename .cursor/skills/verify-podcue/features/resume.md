@@ -22,7 +22,7 @@ A killed `start` keeps each finished transcription slice in `slices.json`. The n
 Preconditions:
 
 - The episode directory exists and `cues.json` is not there yet, so `start` does not return the finished episode.
-- `slices.json` is `{"version": 1, "slices": [...]}`. A reusable slice has the same `index`, `startMs`, `endMs`, `keepStartMs`, `keepEndMs`, and `region` as the current plan.
+- `slices.json` is `{"version": 1, "audioSha256", "language", "slices": [...]}`. `audioSha256` is the episode id. A reusable slice has `state` `done` or `skipped-empty` and the same `index`, `startMs`, `endMs`, `keepStartMs`, `keepEndMs`, and `region` as the current plan. A different audio id or language starts over.
 - A stale lock is empty and at least 30 seconds old, or contains a pid that is not running, or is at least 12 hours old. A lock held by the current process with a live pid is not stale.
 
 - **Resume.** Run `podcue --root <root> start <audio> --language en`. Exit 0, or exit 1 only for a new failure. Stderr contains `resuming transcription, N of M slices already finished`. Slices already in the checkpoint are not transcribed again.

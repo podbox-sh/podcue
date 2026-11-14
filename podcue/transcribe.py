@@ -116,11 +116,19 @@ def _finite(value: object, field: str) -> float:
     return float(value)
 
 
-class SliceSkipped(Exception):
-    """This slice has no usable words. The rest of the episode continues."""
+@dataclass(frozen=True)
+class SliceOutcome:
+    """What one slice produced, after the model boundary.
+
+    `done` means the model returned. `skipped-empty` means there was nothing to align.
+    A crash is not a state. That slice stays pending and the next start tries it again.
+    """
+
+    state: str
+    words: tuple[Word, ...]
 
 
-def transcribe_slice(transcriber: Transcriber, samples: np.ndarray) -> list[Word]:
+def transcribe_slice(transcriber: Transcriber, samples: np.ndarray) -> SliceOutcome:
     """Words for one slice. Empty audio and a failed alignment are no words.
 
     faster-whisper 1.2.1 `WhisperModel.find_alignment` builds
@@ -132,17 +140,18 @@ def transcribe_slice(transcriber: Transcriber, samples: np.ndarray) -> list[Word
     axis is 0 but size of corresponding boolean axis is 1`. That slice is skipped.
     """
     if samples.size == 0:
-        raise SliceSkipped("empty")
+        return SliceOutcome("skipped-empty", ())
     try:
-        return transcriber.transcribe(samples)
+        words = transcriber.transcribe(samples)
     except IndexError as error:
         if "boolean index did not match" in str(error):
-            raise SliceSkipped("no alignment frames") from error
+            return SliceOutcome("skipped-empty", ())
         raise
     except ValueError as error:
         if "word timestamps" in str(error):
-            raise SliceSkipped("speech without word timestamps") from error
+            return SliceOutcome("skipped-empty", ())
         raise
+    return SliceOutcome("done", tuple(words))
 
 
 def whisper_words(segments: list[dict]) -> list[Word]:

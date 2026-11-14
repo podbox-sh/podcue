@@ -95,18 +95,31 @@ def test_faster_whisper_decodes_a_wav(tmp_path):
     assert faster_whisper.audio.decode_audio is decode_audio
 
 
-def test_real_whisper_skips_empty_short_and_noise_slices():
+def test_real_whisper_skips_a_one_frame_slice_and_keeps_going():
+    """10 ms of audio makes faster-whisper align with num_frames=1 and raise."""
     _require_live()
     pytest.importorskip("faster_whisper")
     import numpy as np
 
-    from podcue.transcribe import WhisperTranscriber, transcribe_slice
+    from podcue.pipeline import run_slices
+    from podcue.regions import Slice
+    from podcue.transcribe import WhisperTranscriber
 
     transcriber = WhisperTranscriber("en")
+    one_frame = np.zeros(160, dtype=np.float32)
     silence = np.zeros(8_000, dtype=np.float32)
     tone = np.sin(2 * np.pi * 440 * np.arange(16_000) / 16_000).astype(np.float32)
     noise = np.random.default_rng(1).standard_normal(16_000).astype(np.float32) * 0.05
-    empty = np.zeros(0, dtype=np.float32)
-    for samples in (empty, silence, tone, noise):
-        words = transcribe_slice(transcriber, samples)
-        assert isinstance(words, list)
+    pieces = [np.zeros(0, dtype=np.float32), one_frame, silence, tone, noise]
+    samples = np.concatenate(pieces)
+    plan = []
+    cursor = 0
+    for index, piece in enumerate(pieces):
+        start = cursor * 1000 // 16_000
+        cursor += len(piece)
+        end = cursor * 1000 // 16_000
+        plan.append(Slice(index, start, end, start, end, 0))
+    results = run_slices(samples, plan, transcriber, None, audio_id="live", language="en")
+    assert len(results) == len(plan)
+    assert results[0][1] == []
+    assert results[1][1] == []

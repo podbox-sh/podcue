@@ -20,7 +20,7 @@ from .cues import Word, build_cues, cue_rows, group_table, render_vtt
 from .diarize import Diarizer, Tracks
 from .regions import Slice, plan_regions
 from .store import Episode, lock_pid, read_json, release, retire_labels, try_lock, write_json, write_text
-from .transcribe import LANGUAGES, SliceSkipped, asr_record, open_transcriber, quiet_hub, transcribe_slice
+from .transcribe import LANGUAGES, asr_record, open_transcriber, quiet_hub, transcribe_slice
 from .transcript import assign_words
 
 
@@ -70,28 +70,43 @@ def _slice_matches(saved: dict, piece: Slice) -> bool:
     )
 
 
-def load_slice_checkpoint(path: Path) -> dict[int, dict]:
+def load_slice_checkpoint(path: Path, audio_id: str, language: str) -> dict[int, dict]:
+    """Finished slices for this audio and language. A mismatch starts over."""
     stored = read_json(path)
     if not isinstance(stored, dict):
         return {}
+    if stored.get("version") != 1 or stored.get("audioSha256") != audio_id or stored.get("language") != language:
+        log("slice checkpoint does not match this audio; starting over")
+        return {}
     found: dict[int, dict] = {}
     for item in stored.get("slices") or []:
-        if isinstance(item, dict) and isinstance(item.get("index"), int):
-            found[item["index"]] = item
+        if not isinstance(item, dict) or not isinstance(item.get("index"), int):
+            continue
+        if item.get("state") not in ("done", "skipped-empty"):
+            continue
+        found[item["index"]] = item
     return found
 
 
-def save_slice_checkpoint(path: Path, slices: list[dict]) -> None:
-    write_json(path, {"version": 1, "slices": slices})
+def save_slice_checkpoint(path: Path, audio_id: str, language: str, slices: list[dict]) -> None:
+    write_json(path, {
+        "version": 1,
+        "audioSha256": audio_id,
+        "language": language,
+        "slices": slices,
+    })
 
 
-def run_slices(samples, plan: list[Slice], transcriber, checkpoint: Path | None, report=None) -> list[tuple[Slice, list[Word]]]:
+def run_slices(
+    samples, plan: list[Slice], transcriber, checkpoint: Path | None, report=None,
+    audio_id: str = "", language: str = "",
+) -> list[tuple[Slice, list[Word]]]:
     """Transcribe `plan`, skipping a finished slice recorded in `checkpoint`.
 
     Each finished slice is written before the next one starts. A slice with no speech,
     or whose word alignment has no frames, is stored as no words and the episode continues.
     """
-    saved = load_slice_checkpoint(checkpoint) if checkpoint is not None else {}
+    saved = load_slice_checkpoint(checkpoint, audio_id, language) if checkpoint is not None else {}
     reused = sum(
         1 for piece in plan
         if (prior := saved.get(piece.index)) is not None and _slice_matches(prior, piece)
@@ -113,11 +128,10 @@ def run_slices(samples, plan: list[Slice], transcriber, checkpoint: Path | None,
                 continue
         span = audio.span(samples, piece.start_ms, piece.end_ms)
         log(f"transcribing slice {piece.index + 1}/{len(plan)}")
-        try:
-            words = transcribe_slice(transcriber, span)
-        except SliceSkipped as skipped:
-            log(f"skipping slice {piece.index + 1}/{len(plan)} ({skipped})")
-            words = []
+        outcome = transcribe_slice(transcriber, span)
+        if outcome.state == "skipped-empty":
+            log(f"skipping slice {piece.index + 1}/{len(plan)} (no speech to align)")
+        words = list(outcome.words)
         row = {
             "index": piece.index,
             "startMs": piece.start_ms,
@@ -125,16 +139,20 @@ def run_slices(samples, plan: list[Slice], transcriber, checkpoint: Path | None,
             "keepStartMs": piece.keep_start_ms,
             "keepEndMs": piece.keep_end_ms,
             "region": piece.region,
+            "state": outcome.state,
             "words": [_word_row(word) for word in words],
         }
         finished.append(row)
         if checkpoint is not None:
-            save_slice_checkpoint(checkpoint, finished)
+            save_slice_checkpoint(checkpoint, audio_id, language, finished)
         results.append((piece, words))
     return results
 
 
-def transcribe(samples, language: str, report, transcript_words=None, checkpoint: Path | None = None) -> tuple[list, Tracks]:
+def transcribe(
+    samples, language: str, report, transcript_words=None,
+    checkpoint: Path | None = None, audio_id: str = "",
+) -> tuple[list, Tracks]:
     """Diarize, then either transcribe each slice or place `transcript_words` into the slices.
 
     `transcript_words` is absolute `(startMs, endMs, text)`. When it is set, no ASR model loads.
@@ -156,7 +174,10 @@ def transcribe(samples, language: str, report, transcript_words=None, checkpoint
             log(f"{dropped} transcript words started outside detected speech and were left out")
         report("transcribe", 99)
     else:
-        results = run_slices(samples, plan, transcriber, checkpoint, report)
+        results = run_slices(
+            samples, plan, transcriber, checkpoint, report,
+            audio_id=audio_id, language=language,
+        )
     return build_cues(results, language), tracks
 
 
@@ -241,7 +262,8 @@ def start(source: str, language: str, root: Path, transcript_words=None, fresh: 
                 "asr": asr_record(language, transcript_words is not None),
             })
             cues, tracks = transcribe(
-                samples, language, report, transcript_words, checkpoint=episode.slices,
+                samples, language, report, transcript_words,
+                checkpoint=episode.slices, audio_id=episode.id,
             )
             if fresh:
                 retire_labels(episode)
