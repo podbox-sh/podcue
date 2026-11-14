@@ -3,6 +3,7 @@ import hashlib
 import json
 import multiprocessing as mp
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -520,23 +521,55 @@ def _run_lock_step(path, body: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_a_clean_release_is_not_logged_by_the_next_process(tmp_path):
-    path = tmp_path / "write.lock"
-    first = _run_lock_step(path, "fd = try_lock(path)\nassert fd is not None\nrelease(fd, path)")
-    assert first.returncode == 0, first.stderr
-    assert path.read_bytes() == b""
-    second = _run_lock_step(path, "fd = try_lock(path)\nassert fd is not None\nrelease(fd, path)")
-    assert second.returncode == 0, second.stderr
-    assert "replacing" not in second.stderr
+def test_three_clean_locks_are_not_logged_as_crashes(tmp_path):
+    body = "fd = try_lock(path)\nassert fd is not None\nrelease(fd, path)"
+    for name in ("start.lock", "write.lock"):
+        path = tmp_path / name
+        for _ in range(3):
+            step = _run_lock_step(path, body)
+            assert step.returncode == 0, step.stderr
+            assert "replacing" not in step.stderr
+        assert path.read_bytes() == b""
 
 
-def test_a_crash_that_skips_release_is_still_logged(tmp_path):
-    path = tmp_path / "start.lock"
-    first = _run_lock_step(path, "fd = try_lock(path)\nassert fd is not None\nos._exit(0)")
-    assert first.returncode == 0, first.stderr
-    second = _run_lock_step(path, "fd = try_lock(path)\nassert fd is not None\nrelease(fd, path)")
-    assert second.returncode == 0, second.stderr
-    assert "replacing start.lock left by pid" in second.stderr
+def test_three_clean_label_groups_do_not_log_a_replacement(engine, root, tmp_path):
+    wav = make_wav(tmp_path / "ep.wav")
+    code = cli_main(["start", str(wav)])
+    assert code == 0
+    env = os.environ.copy()
+    env["PODCUE_HOME"] = str(root)
+    payload = '[{"groupId": "gc0001", "label": "Ada"}]'
+    for _ in range(3):
+        proc = subprocess.run(
+            [sys.executable, "-m", "podcue", "label-groups", expected_id(wav), payload],
+            capture_output=True, text=True, env=env, check=False,
+        )
+        assert proc.returncode == 0, proc.stderr + proc.stdout
+        assert "replacing" not in proc.stderr
+
+
+def test_killing_the_lock_holder_is_still_logged(tmp_path):
+    holder = (
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "from podcue.store import try_lock\n"
+        "fd = try_lock(Path(sys.argv[1]))\n"
+        "assert fd is not None\n"
+        "print('ready', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    for name in ("start.lock", "write.lock"):
+        path = tmp_path / name
+        proc = subprocess.Popen(
+            [sys.executable, "-c", holder, str(path)],
+            stdout=subprocess.PIPE, text=True,
+        )
+        assert proc.stdout.readline().strip() == "ready"
+        proc.send_signal(signal.SIGKILL)
+        proc.wait(timeout=5)
+        nxt = _run_lock_step(path, "fd = try_lock(path)\nassert fd is not None\nrelease(fd, path)")
+        assert nxt.returncode == 0, nxt.stderr
+        assert f"replacing {name} left by pid" in nxt.stderr
 
 
 def test_a_lock_file_that_is_not_a_pid_does_not_block(tmp_path, capsys):
@@ -547,7 +580,7 @@ def test_a_lock_file_that_is_not_a_pid_does_not_block(tmp_path, capsys):
     assert path.read_text().strip() == str(os.getpid())
     release(fd, path)
     assert "replacing" not in capsys.readouterr().err
-    path.write_bytes(b"9" * 80 + b"\n")
+    path.write_bytes(b"9" * 40 + b"\n")
     fd = try_lock(path)
     assert fd is not None
     release(fd, path)
@@ -586,6 +619,11 @@ def test_a_damaged_start_lock_does_not_abort_start(engine, root, tmp_path, capsy
     assert code == 0
     episode = Episode(root, started["episode"]["episodeId"])
     episode.start_lock.write_bytes(b"\xff\n")
+    for _ in range(3):
+        again, code = run(capsys, "start", wav, "--fresh")
+        assert code == 0 and again["created"] is True
+        assert "utf-8" not in json.dumps(again)
+    episode.start_lock.write_bytes(b"9" * 40 + b"\n")
     again, code = run(capsys, "start", wav, "--fresh")
     assert code == 0 and again["created"] is True
 

@@ -1,6 +1,6 @@
 # resume
 
-A killed `start` keeps each finished transcription slice in `slices.json`. The next `start` of the same audio continues there. A stale lock file does not block that run.
+A killed `start` keeps each finished transcription slice in `slices.json`. The next `start` of the same audio continues there. A lock file left by a crash does not block that run.
 
 ## Sub-features
 
@@ -8,7 +8,7 @@ A killed `start` keeps each finished transcription slice in `slices.json`. The n
 - `resume-continue` skips slices whose index and time bounds match the checkpoint.
 - `resume-fresh` deletes `slices.json` at the start of `start --fresh`.
 - `resume-done` deletes `slices.json` once `cues.json` is written.
-- `resume-stale-lock` locks a `start.lock` or `write.lock` whose holder has exited. A flock a live process still holds is refused.
+- `resume-leftover-lock` locks a `start.lock` or `write.lock` whose holder has exited. A flock a live process still holds is refused.
 
 ## How to get to it (user POV)
 
