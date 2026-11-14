@@ -8,7 +8,7 @@ A killed `start` keeps each finished transcription slice in `slices.json`. The n
 - `resume-continue` skips slices whose index and time bounds match the checkpoint.
 - `resume-fresh` deletes `slices.json` at the start of `start --fresh`.
 - `resume-done` deletes `slices.json` once `cues.json` is written.
-- `resume-stale-lock` takes over an empty, dead, or 12-hour-old `start.lock` or `write.lock`.
+- `resume-stale-lock` locks a `start.lock` or `write.lock` whose holder has exited. A flock a live process still holds is refused.
 
 ## How to get to it (user POV)
 
@@ -23,17 +23,17 @@ Preconditions:
 
 - The episode directory exists and `cues.json` is not there yet, so `start` does not return the finished episode.
 - `slices.json` is `{"version": 1, "audioSha256", "language", "slices": [...]}`. `audioSha256` is the episode id. A reusable slice has `state` `done` or `skipped-empty` and the same `index`, `startMs`, `endMs`, `keepStartMs`, `keepEndMs`, and `region` as the current plan. A different audio id or language starts over.
-- A stale lock is empty and at least 30 seconds old, or contains a pid that is not running, or is at least 12 hours old. A lock held by the current process with a live pid is not stale.
+- A lock file whose holder has exited does not block. The flock is gone with that process. A lock a live process still holds is `another start ... is running`, including when the file is hours old or the pid written in it is not running.
 
 - **Resume.** Run `podcue --root <root> start <audio> --language en`. Exit 0, or exit 1 only for a new failure. Stderr contains `resuming transcription, N of M slices already finished`. Slices already in the checkpoint are not transcribed again.
 - **Discard.** Run `podcue --root <root> start <audio> --language en --fresh`. `slices.json` is gone before transcription starts. `created` is true.
-- **Take over a lock.** Leave `start.lock` empty and older than 30 seconds, still flocked by a dead holder. Run `start` again. Stderr contains `taking over stale start.lock`. The command is not `reason: running`.
-- **Proof.** After a successful `start`, `slices.json` is absent and `cues.json` is present. Save the stderr lines that mention `resuming transcription` or `taking over stale`.
+- **Replace a leftover lock.** Leave `start.lock` containing a pid that is not running, and do not hold its flock. Run `start` again. Stderr contains `replacing start.lock left by pid`. The command is not `reason: running`.
+- **Proof.** After a successful `start`, `slices.json` is absent and `cues.json` is present. Save the stderr lines that mention `resuming transcription` or `replacing start.lock`.
 
 ## Gotchas
 
 - `start` returns immediately when `cues.json` already exists. Resume is only visible when that file is missing.
 - A checkpoint slice whose bounds do not match the new plan is transcribed again. Do not assert that every old index was skipped.
-- A lock that is empty and younger than 30 seconds, with a live holder, is still `another start ... is running`. Do not treat every empty file as stale.
-- Taking over a lock unlinks that file and locks the new one. Do not kill processes by name to clear it.
+- A lock a live process still holds is `another start ... is running`. Age and the pid text do not make it free.
+- The holder removes the lock file when it finishes. Do not delete locks by killing a process named `podcue`.
 - The full `verify-podcue` drive deletes its `--root`, so it does not leave a checkpoint to resume. This feature is checked by the unit tests, not by that drive.

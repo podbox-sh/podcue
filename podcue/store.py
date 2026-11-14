@@ -2,9 +2,9 @@
 
 Writes go through a temp file plus rename, so a reader never sees half a file. `start.lock`
 holds the pid of the running start under an flock and is removed when that command finishes,
-including when it fails. A crash can leave the file. The next start takes it when the
-flock is free, or when `lock_is_stale` says the holder is gone. Read-modify-write
-commands hold `write.lock` for one call and remove it the same way.
+including when it fails. A crash drops the flock with the process, so the next command locks
+that same path. The file is removed only by the process that holds it, and only while the
+lock still names the path. Read-modify-write commands hold `write.lock` the same way.
 """
 
 from __future__ import annotations
@@ -24,8 +24,6 @@ import yaml
 EPISODE_ID = re.compile(r"^ep_[0-9a-f]{16}$")
 SUMMARY_ID = re.compile(r"^sm_[0-9a-f]{16}$")
 INTERRUPTED = "start was interrupted; run start again"
-LOCK_HELD_LONGER_THAN_A_LIVE_START_S = 12 * 60 * 60
-EMPTY_LOCK_BEFORE_PID_S = 30
 
 
 def resolve_root(flag: str | None) -> Path:
@@ -88,58 +86,60 @@ def _note(message: str) -> None:
 
 def _write_pid(fd: int) -> None:
     os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
     os.write(fd, f"{os.getpid()}\n".encode())
 
 
+def _pid_on_fd(fd: int) -> int | None:
+    os.lseek(fd, 0, os.SEEK_SET)
+    text = os.read(fd, 64).decode().strip()
+    return int(text) if text.isdigit() else None
+
+
+def _locks_the_path(fd: int, path: Path) -> bool:
+    """True when `fd` still refers to the file at `path`.
+
+    flock follows the inode. A holder can unlink the path after another process
+    has opened it and before that process flocks. The flock then succeeds on an
+    unlinked inode, and a third process can lock a new file at the same path.
+    """
+    try:
+        current = os.stat(path)
+    except FileNotFoundError:
+        return False
+    held = os.fstat(fd)
+    return held.st_ino == current.st_ino and held.st_dev == current.st_dev
+
+
 def _lock_nb(path: Path) -> int | None:
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    """Lock the file at `path`, or return None while a live holder has it."""
+    while True:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            return None
+        if _locks_the_path(fd, path):
+            return fd
         os.close(fd)
-        return None
-    return fd
-
-
-def lock_is_stale(path: Path) -> str | None:
-    try:
-        info = path.stat()
-    except FileNotFoundError:
-        return None
-    age = time.time() - info.st_mtime
-    pid = lock_pid(path)
-    if info.st_size == 0 and age >= EMPTY_LOCK_BEFORE_PID_S:
-        return f"empty for {int(age)}s"
-    if pid is not None and not pid_alive(pid):
-        return f"pid {pid} is not running"
-    if age >= LOCK_HELD_LONGER_THAN_A_LIVE_START_S:
-        return f"older than {LOCK_HELD_LONGER_THAN_A_LIVE_START_S // 3600} hours"
-    return None
-
-
-def _take_over(path: Path, reason: str) -> int | None:
-    _note(f"taking over stale {path.name} ({reason})")
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
-    fd = _lock_nb(path)
-    if fd is None:
-        return None
-    _write_pid(fd)
-    return fd
 
 
 def try_lock(path: Path) -> int | None:
-    """Take the start lock and write our pid into it, or return None while another process holds it."""
+    """Take the lock and write our pid into it, or return None while another process holds it.
+
+    A pid left in the file does not grant the lock. The flock does. When this
+    process gets the flock and the file still names a dead pid, that is a crash
+    leftover and it is logged.
+    """
     fd = _lock_nb(path)
-    if fd is not None:
-        _write_pid(fd)
-        return fd
-    reason = lock_is_stale(path)
-    if reason is None:
+    if fd is None:
         return None
-    return _take_over(path, reason)
+    previous = _pid_on_fd(fd)
+    if previous is not None and previous != os.getpid() and not pid_alive(previous):
+        _note(f"replacing {path.name} left by pid {previous}")
+    _write_pid(fd)
+    return fd
 
 
 def release(fd: int, path: Path) -> None:
@@ -190,8 +190,8 @@ def pid_alive(pid: int) -> bool:
 def writing(episode: Episode):
     """Serialize read-modify-write calls on one episode.
 
-    Wait by trying again. A blocking flock on the old inode stays held after that
-    file is unlinked, and the next writer can lock a new file at the same time.
+    Wait by trying again. A blocking flock stays on an unlinked inode after the
+    holder removes the path, so the next writer could lock a new file as well.
     """
     while True:
         fd = try_lock(episode.write_lock)

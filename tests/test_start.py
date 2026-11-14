@@ -1,6 +1,7 @@
 import fcntl
 import hashlib
 import json
+import multiprocessing as mp
 import os
 import subprocess
 import sys
@@ -13,7 +14,7 @@ from conftest import make_wav, run
 
 from podcue import audio, pipeline, transcribe, weights
 from podcue.cli import execute, main as cli_main
-from podcue.store import Episode, try_lock, writing
+from podcue.store import Episode, release, try_lock, writing
 
 
 def expected_id(path):
@@ -285,7 +286,7 @@ def test_a_young_empty_lock_still_blocks(engine, root, tmp_path, capsys):
     assert engine.calls == 0
 
 
-def test_an_old_empty_lock_is_taken_over(engine, root, tmp_path, capsys):
+def test_an_old_lock_held_by_a_live_process_still_blocks(engine, root, tmp_path, capsys):
     wav = make_wav(tmp_path / "ep.wav")
     folder = Episode(root, expected_id(wav)).dir
     folder.mkdir(parents=True)
@@ -293,21 +294,18 @@ def test_an_old_empty_lock_is_taken_over(engine, root, tmp_path, capsys):
     fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o644)
     fcntl.flock(fd, fcntl.LOCK_EX)
     os.ftruncate(fd, 0)
-    old = time.time() - 120
+    os.write(fd, f"{os.getpid()}\n".encode())
+    old = time.time() - 13 * 3600
     os.utime(lock, (old, old))
     try:
-        code = cli_main(["start", str(wav)])
-        captured = capsys.readouterr()
+        result, code = run(capsys, "start", wav)
     finally:
         os.close(fd)
-    assert code == 0, captured.out
-    assert "taking over stale start.lock" in captured.err
-    assert "empty for" in captured.err
-    assert engine.calls == 1
-    assert not lock.exists()
+    assert code == 1 and result["reason"] == "running"
+    assert engine.calls == 0
 
 
-def test_a_held_lock_with_a_dead_pid_is_taken_over(engine, root, tmp_path, capsys):
+def test_a_held_lock_with_a_dead_pid_still_blocks(engine, root, tmp_path, capsys):
     wav = make_wav(tmp_path / "ep.wav")
     folder = Episode(root, expected_id(wav)).dir
     folder.mkdir(parents=True)
@@ -317,14 +315,26 @@ def test_a_held_lock_with_a_dead_pid_is_taken_over(engine, root, tmp_path, capsy
     os.ftruncate(fd, 0)
     os.write(fd, f"{dead_pid()}\n".encode())
     try:
-        code = cli_main(["start", str(wav)])
-        captured = capsys.readouterr()
+        result, code = run(capsys, "start", wav)
     finally:
         os.close(fd)
+    assert code == 1 and result["reason"] == "running"
+    assert engine.calls == 0
+
+
+def test_a_lock_file_left_by_a_dead_process_does_not_block(engine, root, tmp_path, capsys):
+    wav = make_wav(tmp_path / "ep.wav")
+    folder = Episode(root, expected_id(wav)).dir
+    folder.mkdir(parents=True)
+    lock = folder / "start.lock"
+    pid = dead_pid()
+    lock.write_text(f"{pid}\n")
+    code = cli_main(["start", str(wav)])
+    captured = capsys.readouterr()
     assert code == 0, captured.out
-    assert "taking over stale start.lock" in captured.err
-    assert "is not running" in captured.err
+    assert f"replacing start.lock left by pid {pid}" in captured.err
     assert engine.calls == 1
+    assert not lock.exists()
 
 
 def test_writers_do_not_overlap_after_the_lock_file_is_removed(tmp_path):
@@ -355,21 +365,127 @@ def test_writers_do_not_overlap_after_the_lock_file_is_removed(tmp_path):
     assert overlap["max"] == 1
 
 
-def test_an_old_empty_write_lock_is_taken_over(tmp_path, capsys):
+def test_a_write_lock_left_by_a_dead_process_is_replaced(tmp_path, capsys):
     episode = Episode(tmp_path, "ep_" + "ab" * 8)
     episode.dir.mkdir(parents=True)
-    fd = os.open(episode.write_lock, os.O_RDWR | os.O_CREAT, 0o644)
+    pid = dead_pid()
+    episode.write_lock.write_text(f"{pid}\n")
+    with writing(episode):
+        assert episode.write_lock.read_text().strip() == str(os.getpid())
+    assert f"replacing write.lock left by pid {pid}" in capsys.readouterr().err
+    assert not episode.write_lock.exists()
+
+
+def _hold_lock(path, ready):
+    fd = try_lock(path)
+    assert fd is not None
+    ready.set()
+    time.sleep(30)
+    release(fd, path)
+
+
+def _contender(path, barrier, out):
+    barrier.wait()
+    fd = try_lock(path)
+    out.put(fd is not None)
+    if fd is not None:
+        time.sleep(0.2)
+        release(fd, path)
+
+
+def _orphan(path, ready):
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
     fcntl.flock(fd, fcntl.LOCK_EX)
     os.ftruncate(fd, 0)
-    old = time.time() - 120
-    os.utime(episode.write_lock, (old, old))
-    try:
+    os.write(fd, b"999999\n")
+    ready.set()
+    time.sleep(30)
+    os.close(fd)
+
+
+def _exclusive_writer(root, iterations, out):
+    episode = Episode(root, "ep_0123456789abcdef")
+    marker = episode.dir / "inside"
+    overlaps = 0
+    for _ in range(iterations):
         with writing(episode):
-            assert episode.write_lock.read_text().strip() == str(os.getpid())
-    finally:
-        os.close(fd)
-    assert "taking over stale write.lock" in capsys.readouterr().err
-    assert not episode.write_lock.exists()
+            try:
+                fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                overlaps += 1
+                continue
+            time.sleep(0.001)
+            os.close(fd)
+            os.unlink(marker)
+    out.put(overlaps)
+
+
+def test_a_live_lock_is_not_stolen_after_twelve_hours(tmp_path):
+    ctx = mp.get_context("spawn")
+    path = tmp_path / "start.lock"
+    ready = ctx.Event()
+    holder = ctx.Process(target=_hold_lock, args=(path, ready))
+    holder.start()
+    assert ready.wait(10)
+    assert try_lock(path) is None
+    old = time.time() - 13 * 3600
+    os.utime(path, (old, old))
+    stolen = try_lock(path)
+    alive = holder.is_alive()
+    holder.terminate()
+    holder.join(5)
+    if stolen is not None:
+        release(stolen, path)
+    assert stolen is None and alive
+
+
+def test_eight_starts_do_not_share_one_held_lock(tmp_path):
+    ctx = mp.get_context("spawn")
+    path = tmp_path / "start.lock"
+    ready = ctx.Event()
+    orphan = ctx.Process(target=_orphan, args=(path, ready))
+    orphan.start()
+    assert ready.wait(10)
+    barrier = ctx.Barrier(8)
+    out = ctx.Queue()
+    contenders = [ctx.Process(target=_contender, args=(path, barrier, out)) for _ in range(8)]
+    for contender in contenders:
+        contender.start()
+    winners = sum(out.get(timeout=10) for _ in contenders)
+    for contender in contenders:
+        contender.join(10)
+    orphan.terminate()
+    orphan.join(5)
+    assert winners == 0
+
+
+def test_eight_starts_take_one_free_lock(tmp_path):
+    ctx = mp.get_context("spawn")
+    path = tmp_path / "start.lock"
+    path.write_text("999999\n")
+    barrier = ctx.Barrier(8)
+    out = ctx.Queue()
+    contenders = [ctx.Process(target=_contender, args=(path, barrier, out)) for _ in range(8)]
+    for contender in contenders:
+        contender.start()
+    winners = sum(out.get(timeout=10) for _ in contenders)
+    for contender in contenders:
+        contender.join(10)
+    assert winners == 1
+
+
+def test_writers_do_not_share_the_lock_across_processes(tmp_path):
+    ctx = mp.get_context("spawn")
+    episode = Episode(tmp_path, "ep_0123456789abcdef")
+    episode.dir.mkdir(parents=True)
+    out = ctx.Queue()
+    writers = [ctx.Process(target=_exclusive_writer, args=(tmp_path, 40, out)) for _ in range(8)]
+    for writer in writers:
+        writer.start()
+    overlaps = sum(out.get(timeout=30) for _ in writers)
+    for writer in writers:
+        writer.join(30)
+    assert overlaps == 0
 
 
 def test_fresh_discards_a_slice_checkpoint(engine, root, tmp_path, capsys):

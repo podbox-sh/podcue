@@ -306,7 +306,7 @@ This is optional. It downloads the two pinned diarization weight files now inste
   slices.json         transcription checkpoint; removed when cues.json is written
 ```
 
-Every file is written to a temp file and renamed into place, so a reader never sees half a file. The only coordination is the two lock files. `start.lock` is held with `flock` and holds the pid. `write.lock` is held the same way for one label or summary write. Both files are removed when the command finishes, including when it fails. A crash can leave the file. A later command takes a stale lock and logs that: the file is empty and older than 30 seconds, the pid in it is not running, or the file is older than 12 hours. A lock held by a live pid is still refused. `slices.json` records each finished transcription slice so a killed `start` continues there. `start --fresh` deletes that file first.
+Every file is written to a temp file and renamed into place, so a reader never sees half a file. The only coordination is the two lock files. `start.lock` is held with `flock` and holds the pid. `write.lock` is held the same way for one label or summary write. Both files are removed when the command finishes, including when it fails. A crash drops the flock with the process and can leave the file. The next command locks that same path and, when the file names a pid that is not running, logs that it is replacing it. A flock a live process still holds is refused, including when the file is old or the pid written in it is gone. `slices.json` records each finished transcription slice so a killed `start` continues there. `start --fresh` deletes that file first.
 
 | File | Schema |
 | --- | --- |
