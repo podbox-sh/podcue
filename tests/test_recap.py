@@ -8,12 +8,18 @@ from pathlib import Path
 import pytest
 from conftest import make_wav, run
 
+import numpy as np
+
 from podcue import __version__, audio
 from podcue.cli import main as cli_main
 from podcue.fetch import download_with_ytdlp, is_direct_media
 from podcue.recap import (
+    RATE,
     RecapError,
     SPACY_MODEL,
+    Span,
+    build,
+    clip_edges,
     clip_flags,
     clip_speakers,
     ensure_spacy_model,
@@ -21,9 +27,9 @@ from podcue.recap import (
     narration_loudness_filter,
     parse_script,
     parse_ts,
+    pick_words,
     quiet_torch,
     resolve_voice,
-    snap,
     words_from_cues,
 )
 from podcue.store import Episode
@@ -99,34 +105,44 @@ def test_parse_rejects_a_bad_script(body, message):
         parse_script(body)
 
 
-def test_words_are_spread_across_the_cue_and_edges_snap_to_them():
+def test_words_are_spread_across_the_cue_and_edges_pick_the_nearest_word():
     words = words_from_cues([
         {"startMs": 0, "endMs": 1_000, "text": "ab c"},
         {"startMs": 10_000, "endMs": 11_000, "text": "next bit."},
     ])
-    assert words[0][:3] == (0.0, 0.6, " ab")
-    assert words[1][:3] == (0.6, 1.0, " c")
-    start, end, first, last = snap(
-        [(0.0, 0.4, " hello"), (0.5, 0.9, " there."), (10.0, 10.4, " next"), (10.5, 11.0, " bit.")],
-        0.5,
-        10.4,
-    )
-    assert (start, end, first, last) == (0.45, 10.45, 1, 2)
+    assert words[0] == (0.0, 0.6, " ab")
+    assert words[1] == (0.6, 1.0, " c")
+    timed = [(0.0, 0.4, " hello"), (0.5, 0.9, " there."), (10.0, 10.4, " next"), (10.5, 11.0, " bit.")]
+    assert pick_words(timed, 0.5, 10.4) == (1, 2)
+    assert pick_words(timed, 10.6, 0.2) == (3, 3), "an end before the start keeps the first word"
+    with pytest.raises(RecapError, match="no cue text"):
+        pick_words([], 0.0, 1.0)
 
 
-def test_snap_stays_inside_the_cue_and_out_of_another_speaker():
-    # Without the clamp the leading pad is 10.00 - 0.08 = 9.92, inside the previous cue,
-    # and the trailing pad is 19.90 + 0.35 = 20.25, inside the next speaker's cue.
-    words = [
-        (9.50, 9.84, " earlier", 0.0, 10.0, "Ada"),
-        (10.00, 10.50, " clip", 10.0, 20.0, "Ben"),
-        (19.50, 19.90, " tail", 10.0, 20.0, "Ben"),
-        (21.00, 21.40, " next", 20.0, 30.0, "Ada"),
-    ]
-    start, end, first, last = snap(words, 10.0, 19.9)
-    assert (first, last) == (1, 2)
-    assert start == 10.0
-    assert end == 20.0
+def test_clip_end_pads_past_the_last_word_and_stops_short_of_the_next():
+    words = [(0.0, 0.4, " a"), (1.0, 1.5, " b"), (5.0, 5.4, " c")]
+    _, end = clip_edges(words, 1, 1, 0.20, None)
+    assert 1.5 + 0.20 <= end <= 5.0 - 0.03, end
+    tight = [(1.0, 1.5, " b"), (1.6, 2.0, " c")]
+    assert clip_edges(tight, 0, 0, 0.20, None)[1] == 1.57, "the next word 0.10 s later caps the end"
+
+
+def test_clip_end_snaps_to_where_the_sound_stops():
+    words = [(1.0, 1.5, " b"), (5.0, 5.4, " c")]
+    samples = np.zeros(6 * RATE, dtype=np.float32)
+    samples[RATE:int(1.85 * RATE)] = 0.5
+    _, end = clip_edges(words, 0, 0, 0.20, Span(samples, 0.0))
+    assert end == 1.85, "sound 350 ms past the word end pushes the cut past the 200 ms pad"
+    _, silent = clip_edges(words, 0, 0, 0.20, Span(np.zeros(6 * RATE, dtype=np.float32), 0.0))
+    assert silent == 1.7, "with no level to compare, the cut is the padded end"
+
+
+def test_clip_start_leads_the_first_word_and_never_enters_the_previous_one():
+    wide = [(0.0, 0.4, " a"), (1.0, 1.5, " b")]
+    assert clip_edges(wide, 1, 1, 0.20, None)[0] == 0.95
+    close = [(0.5, 0.98, " a"), (1.0, 1.5, " b")]
+    assert clip_edges(close, 1, 1, 0.20, None)[0] == 0.98
+    assert clip_edges([(0.02, 0.4, " a")], 0, 0, 0.20, None)[0] == 0.0, "a clip at t=0 does not start negative"
 
 
 def test_length_warns_only_under_4s_or_over_45s_and_an_uncertain_cue_is_flagged():
@@ -305,6 +321,9 @@ def audio_ops(monkeypatch):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"RIFFclip")
 
+    def read_span(source, t0, t1):
+        return recap.Span(np.zeros(round((t1 - t0) * recap.RATE), dtype=np.float32), t0)
+
     def loudnorm(source, dest):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"RIFFnorm")
@@ -321,6 +340,7 @@ def audio_ops(monkeypatch):
 
     monkeypatch.setattr(recap, "narrate", narrate)
     monkeypatch.setattr(recap, "cut_clip", cut)
+    monkeypatch.setattr(recap, "read_span", read_span)
     monkeypatch.setattr(recap, "loudnorm_to", loudnorm)
     monkeypatch.setattr(recap, "measure_loudness", measure)
     monkeypatch.setattr(recap, "stitch", stitch)
@@ -400,6 +420,19 @@ def test_build_flags_a_clip_under_4_seconds(episode_id, audio_ops, tmp_path, cap
     assert code == 0
     assert any("under 4s" in flag for flag in result["flags"])
     assert audio_ops["narrate"] == []
+
+
+def test_build_flags_length_on_the_padded_clip(episode_id, root, audio_ops, tmp_path):
+    rows = [{"startMs": 0, "endMs": 3_850, "groupId": "gc0001", "speaker": "Ada", "text": "words that run on"}]
+    script = write_script(tmp_path / "script.json", {
+        "segments": [{"type": "clip", "start": 0, "end": 3.85, "speaker": "Ada"}],
+    })
+    episode = Episode(root, episode_id)
+    padded = build(episode, rows, script, str(tmp_path / "padded.mp3"))
+    assert padded["segments"][0]["end"] == 4.05
+    assert not any("under 4s" in flag for flag in padded["flags"]), padded["flags"]
+    bare = build(episode, rows, script, str(tmp_path / "bare.mp3"), tail_pad=0.0)
+    assert any("under 4s" in flag for flag in bare["flags"]), "without the pad the same words are under 4 s"
 
 
 def test_build_output_field_is_used_when_out_is_omitted(episode_id, audio_ops, tmp_path, monkeypatch, capsys):
