@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pytest
 
@@ -161,6 +163,83 @@ def test_a_skipped_slice_is_checkpointed_and_not_retried(tmp_path, capsys):
     assert second.calls == []
     assert again[0][1] == []
     assert again[1][1] == [Word("two", 0.0, 0.1)]
+
+
+def test_redoing_one_slice_keeps_a_later_finished_slice(tmp_path):
+    checkpoint = tmp_path / "slices.json"
+    audio_id = "ep_aaaaaaaaaaaaaaaa"
+    plan = [
+        Slice(0, 0, 900, 0, 900, 0),
+        Slice(1, 1_000, 2_000, 1_000, 2_000, 0),
+        Slice(2, 2_000, 2_500, 2_000, 2_500, 0),
+    ]
+    checkpoint.write_text(json.dumps({
+        "version": 1,
+        "audioSha256": audio_id,
+        "language": "en",
+        "slices": [
+            {"index": 0, "startMs": 0, "endMs": 1000, "keepStartMs": 0, "keepEndMs": 1000,
+             "region": 0, "state": "done", "words": [{"text": "zero", "start": 0.1, "end": 0.2}]},
+            {"index": 1, "startMs": 1000, "endMs": 2000, "keepStartMs": 1000, "keepEndMs": 2000,
+             "region": 0, "state": "skipped-empty", "words": []},
+            {"index": 2, "startMs": 2000, "endMs": 2400, "keepStartMs": 2000, "keepEndMs": 2400,
+             "region": 0, "state": "done", "words": [{"text": "two", "start": 0.0, "end": 0.1}]},
+        ],
+    }), encoding="utf-8")
+    samples = np.zeros(16_000 * 4, dtype=np.float32)
+
+    class Model:
+        def __init__(self, crash: bool):
+            self.calls = []
+            self.crash = crash
+
+        def transcribe(self, audio):
+            self.calls.append(int(audio.size))
+            if self.crash and int(audio.size) == 8_000:
+                raise RuntimeError("killed mid slice")
+            return [Word("new", 0.0, 0.1)]
+
+    first = Model(True)
+    with pytest.raises(RuntimeError, match="killed mid slice"):
+        run_slices(samples, plan, first, checkpoint, audio_id=audio_id, language="en")
+    left = json.loads(checkpoint.read_text())
+    by_index = {item["index"]: item for item in left["slices"]}
+    assert by_index[1]["state"] == "skipped-empty"
+    assert by_index[1]["words"] == []
+    second = Model(False)
+    run_slices(samples, plan, second, checkpoint, audio_id=audio_id, language="en")
+    assert second.calls == [8_000]
+
+
+def test_a_different_boolean_index_error_is_not_saved_as_empty(tmp_path):
+    try:
+        np.arange(3)[np.array([True, False])]
+    except IndexError as error:
+        caught = error
+    else:
+        raise AssertionError("expected a boolean index error")
+
+    class Boom:
+        def __init__(self):
+            self.calls = 0
+
+        def transcribe(self, samples):
+            self.calls += 1
+            raise caught
+
+    outcome_error = Boom()
+    with pytest.raises(IndexError, match="size of axis is 3"):
+        transcribe_slice(outcome_error, np.zeros(1_600, dtype=np.float32))
+    checkpoint = tmp_path / "slices.json"
+    plan = [Slice(0, 0, 1_000, 0, 1_000, 0)]
+    first = Boom()
+    with pytest.raises(IndexError, match="size of axis is 3"):
+        run_slices(np.zeros(16_000, dtype=np.float32), plan, first, checkpoint, audio_id="ep_test", language="en")
+    assert not checkpoint.exists()
+    second = Boom()
+    with pytest.raises(IndexError, match="size of axis is 3"):
+        run_slices(np.zeros(16_000, dtype=np.float32), plan, second, checkpoint, audio_id="ep_test", language="en")
+    assert second.calls == 1
 
 
 def test_a_checkpoint_for_other_audio_is_not_resumed(tmp_path):

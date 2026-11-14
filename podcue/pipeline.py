@@ -101,10 +101,14 @@ def run_slices(
     audio_id: str = "", language: str = "",
 ) -> list[tuple[Slice, list[Word]]]:
     saved = load_slice_checkpoint(checkpoint, audio_id, language) if checkpoint is not None else {}
-    reused = sum(
-        1 for piece in plan
-        if (prior := saved.get(piece.index)) is not None and _slice_matches(prior, piece)
-    )
+    kept = {
+        index: row for index, row in saved.items()
+        if any(
+            piece.index == index and _slice_matches(row, piece) and _words_from_saved(row) is not None
+            for piece in plan
+        )
+    }
+    reused = len(kept)
     if reused:
         log(f"resuming transcription, {reused} of {len(plan)} slices already finished")
     results: list[tuple[Slice, list[Word]]] = []
@@ -138,7 +142,12 @@ def run_slices(
         }
         finished.append(row)
         if checkpoint is not None:
-            save_slice_checkpoint(checkpoint, audio_id, language, finished)
+            merged = dict(kept)
+            for done in finished:
+                merged[done["index"]] = done
+            save_slice_checkpoint(
+                checkpoint, audio_id, language, [merged[index] for index in sorted(merged)],
+            )
         results.append((piece, words))
     return results
 

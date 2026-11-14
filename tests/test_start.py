@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import warnings
 
@@ -324,6 +325,34 @@ def test_a_held_lock_with_a_dead_pid_is_taken_over(engine, root, tmp_path, capsy
     assert "taking over stale start.lock" in captured.err
     assert "is not running" in captured.err
     assert engine.calls == 1
+
+
+def test_writers_do_not_overlap_after_the_lock_file_is_removed(tmp_path):
+    episode = Episode(tmp_path, "ep_" + "ef" * 8)
+    episode.dir.mkdir(parents=True)
+    overlap = {"cur": 0, "max": 0}
+    guard = threading.Lock()
+
+    def writer(delay, hold):
+        time.sleep(delay)
+        with writing(episode):
+            with guard:
+                overlap["cur"] += 1
+                overlap["max"] = max(overlap["max"], overlap["cur"])
+            time.sleep(hold)
+            with guard:
+                overlap["cur"] -= 1
+
+    threads = [
+        threading.Thread(target=writer, args=(0.0, 0.4)),
+        threading.Thread(target=writer, args=(0.05, 0.6)),
+        threading.Thread(target=writer, args=(0.5, 0.2)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert overlap["max"] == 1
 
 
 def test_an_old_empty_write_lock_is_taken_over(tmp_path, capsys):

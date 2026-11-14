@@ -136,7 +136,7 @@ def transcribe_slice(transcriber: Transcriber, samples: np.ndarray) -> SliceOutc
     try:
         words = transcriber.transcribe(samples)
     except IndexError as error:
-        if "boolean index did not match" in str(error):
+        if "size of axis is 0 but size of corresponding boolean axis is 1" in str(error):
             return SliceOutcome("skipped-empty", ())
         raise
     except ValueError as error:

@@ -188,12 +188,16 @@ def pid_alive(pid: int) -> bool:
 
 @contextlib.contextmanager
 def writing(episode: Episode):
-    """Serialize read-modify-write calls on one episode."""
-    fd = try_lock(episode.write_lock)
-    if fd is None:
-        fd = os.open(episode.write_lock, os.O_RDWR | os.O_CREAT, 0o644)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        _write_pid(fd)
+    """Serialize read-modify-write calls on one episode.
+
+    Wait by trying again. A blocking flock on the old inode stays held after that
+    file is unlinked, and the next writer can lock a new file at the same time.
+    """
+    while True:
+        fd = try_lock(episode.write_lock)
+        if fd is not None:
+            break
+        time.sleep(0.05)
     try:
         yield
     finally:
