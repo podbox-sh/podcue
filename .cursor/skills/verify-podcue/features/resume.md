@@ -27,7 +27,7 @@ Preconditions:
 
 - **Resume.** Run `podcue --root <root> start <audio> --language en`. Exit 0, or exit 1 only for a new failure. Stderr contains `resuming transcription, N of M slices already finished`. Slices already in the checkpoint are not transcribed again.
 - **Discard.** Run `podcue --root <root> start <audio> --language en --fresh`. `slices.json` is gone before transcription starts. `created` is true.
-- **Replace a leftover lock.** Leave `start.lock` containing a pid that is not running, and do not hold its flock. Run `start` again. Stderr contains `replacing start.lock left by pid`. The command is not `reason: running`.
+- **Replace a leftover lock.** Leave `start.lock` containing a pid that is not running, and do not hold its flock. That is a crash: a clean finish clears the pid. Run `start` again. Stderr contains `replacing start.lock left by pid`. The command is not `reason: running`. A clean `start` followed by another command does not print that line.
 - **Proof.** After a successful `start`, `slices.json` is absent and `cues.json` is present. Save the stderr lines that mention `resuming transcription` or `replacing start.lock`.
 
 ## Gotchas

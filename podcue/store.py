@@ -112,28 +112,45 @@ def _lock_nb(path: Path) -> int | None:
     return fd
 
 
+def _log_if_crashed(fd: int, path: Path) -> None:
+    """Log when the file still names a pid that is not running.
+
+    A clean `release` truncates the file, so this line means the holder did not
+    finish. Bytes that are not a pid are ignored. The read only feeds the log.
+    """
+    try:
+        previous = _pid_on_fd(fd)
+        if previous is not None and previous != os.getpid() and not pid_alive(previous):
+            _note(f"replacing {path.name} left by pid {previous}")
+    except (UnicodeDecodeError, ValueError, OverflowError):
+        return
+
+
 def try_lock(path: Path) -> int | None:
     """Take the lock and write our pid into it, or return None while another process holds it.
 
-    A pid left in the file does not grant the lock. The flock does. When this
-    process gets the flock and the file still names a dead pid, that is a crash
-    leftover and it is logged. A child that inherited the fd is a live holder
-    until it exits. The pid in the file can be the dead parent, and that does
-    not make the lock free.
+    A pid left in the file does not grant the lock. The flock does. A child that
+    inherited the fd is a live holder until it exits. The pid in the file can be
+    the dead parent, and that does not make the lock free.
     """
     fd = _lock_nb(path)
     if fd is None:
         return None
-    previous = _pid_on_fd(fd)
-    if previous is not None and previous != os.getpid() and not pid_alive(previous):
-        _note(f"replacing {path.name} left by pid {previous}")
-    _write_pid(fd)
+    try:
+        _log_if_crashed(fd, path)
+        _write_pid(fd)
+    except BaseException:
+        os.close(fd)
+        raise
     return fd
 
 
 def release(fd: int, path: Path) -> None:
-    """Drop the flock and leave `path` where it is."""
-    os.close(fd)
+    """Drop the flock, clear the pid, and leave `path` where it is."""
+    try:
+        os.ftruncate(fd, 0)
+    finally:
+        os.close(fd)
     if not path.exists():
         _note(f"{path.name} disappeared while its lock was released")
 

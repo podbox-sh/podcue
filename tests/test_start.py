@@ -506,6 +506,90 @@ def test_unknown_episode(root, capsys):
     assert run(capsys, "cues", "../../etc")[0]["state"] == "unknown"
 
 
+def _run_lock_step(path, body: str) -> subprocess.CompletedProcess[str]:
+    script = (
+        "import os, sys\n"
+        "from pathlib import Path\n"
+        "from podcue.store import try_lock, release\n"
+        "path = Path(sys.argv[1])\n"
+        f"{body}\n"
+    )
+    return subprocess.run(
+        [sys.executable, "-c", script, str(path)],
+        capture_output=True, text=True, check=False,
+    )
+
+
+def test_a_clean_release_is_not_logged_by_the_next_process(tmp_path):
+    path = tmp_path / "write.lock"
+    first = _run_lock_step(path, "fd = try_lock(path)\nassert fd is not None\nrelease(fd, path)")
+    assert first.returncode == 0, first.stderr
+    assert path.read_bytes() == b""
+    second = _run_lock_step(path, "fd = try_lock(path)\nassert fd is not None\nrelease(fd, path)")
+    assert second.returncode == 0, second.stderr
+    assert "replacing" not in second.stderr
+
+
+def test_a_crash_that_skips_release_is_still_logged(tmp_path):
+    path = tmp_path / "start.lock"
+    first = _run_lock_step(path, "fd = try_lock(path)\nassert fd is not None\nos._exit(0)")
+    assert first.returncode == 0, first.stderr
+    second = _run_lock_step(path, "fd = try_lock(path)\nassert fd is not None\nrelease(fd, path)")
+    assert second.returncode == 0, second.stderr
+    assert "replacing start.lock left by pid" in second.stderr
+
+
+def test_a_lock_file_that_is_not_a_pid_does_not_block(tmp_path, capsys):
+    path = tmp_path / "start.lock"
+    path.write_bytes(b"\xff\n")
+    fd = try_lock(path)
+    assert fd is not None
+    assert path.read_text().strip() == str(os.getpid())
+    release(fd, path)
+    assert "replacing" not in capsys.readouterr().err
+    path.write_bytes(b"9" * 80 + b"\n")
+    fd = try_lock(path)
+    assert fd is not None
+    release(fd, path)
+
+
+def test_a_failed_lock_does_not_keep_the_flock(tmp_path, monkeypatch):
+    episode = Episode(tmp_path, "ep_" + "ab" * 8)
+    episode.dir.mkdir(parents=True)
+    real = try_lock.__globals__["_write_pid"]
+    state = {"n": 0}
+
+    def boom(fd):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise RuntimeError("write failed")
+        return real(fd)
+
+    monkeypatch.setattr("podcue.store._write_pid", boom)
+    with pytest.raises(RuntimeError, match="write failed"):
+        with writing(episode):
+            pass
+    entered = threading.Event()
+
+    def again():
+        with writing(episode):
+            entered.set()
+
+    thread = threading.Thread(target=again, daemon=True)
+    thread.start()
+    assert entered.wait(2)
+
+
+def test_a_damaged_start_lock_does_not_abort_start(engine, root, tmp_path, capsys):
+    wav = make_wav(tmp_path / "ep.wav")
+    started, code = run(capsys, "start", wav)
+    assert code == 0
+    episode = Episode(root, started["episode"]["episodeId"])
+    episode.start_lock.write_bytes(b"\xff\n")
+    again, code = run(capsys, "start", wav, "--fresh")
+    assert code == 0 and again["created"] is True
+
+
 def test_write_lock_is_released_when_the_command_finishes(tmp_path):
     episode = Episode(tmp_path, "ep_" + "ab" * 8)
     episode.dir.mkdir(parents=True)
