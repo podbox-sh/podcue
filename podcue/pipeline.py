@@ -16,11 +16,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import audio, weights
-from .cues import build_cues, cue_rows, group_table, render_vtt
+from .cues import Word, build_cues, cue_rows, group_table, render_vtt
 from .diarize import Diarizer, Tracks
-from .regions import plan_regions
+from .regions import Slice, plan_regions
 from .store import Episode, lock_pid, read_json, release, retire_labels, try_lock, write_json, write_text
-from .transcribe import LANGUAGES, asr_record, open_transcriber, quiet_hub
+from .transcribe import LANGUAGES, SliceSkipped, asr_record, open_transcriber, quiet_hub, transcribe_slice
 from .transcript import assign_words
 
 
@@ -46,10 +46,99 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def transcribe(samples, language: str, report, transcript_words=None) -> tuple[list, Tracks]:
+def _word_row(word: Word) -> dict:
+    return {"text": word.text, "start": word.start, "end": word.end}
+
+
+def _words_from_saved(saved: dict) -> list[Word] | None:
+    try:
+        return [
+            Word(str(row["text"]), float(row["start"]), float(row["end"]))
+            for row in saved.get("words") or []
+        ]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _slice_matches(saved: dict, piece: Slice) -> bool:
+    return (
+        saved.get("startMs") == piece.start_ms
+        and saved.get("endMs") == piece.end_ms
+        and saved.get("keepStartMs") == piece.keep_start_ms
+        and saved.get("keepEndMs") == piece.keep_end_ms
+        and saved.get("region") == piece.region
+    )
+
+
+def load_slice_checkpoint(path: Path) -> dict[int, dict]:
+    stored = read_json(path)
+    if not isinstance(stored, dict):
+        return {}
+    found: dict[int, dict] = {}
+    for item in stored.get("slices") or []:
+        if isinstance(item, dict) and isinstance(item.get("index"), int):
+            found[item["index"]] = item
+    return found
+
+
+def save_slice_checkpoint(path: Path, slices: list[dict]) -> None:
+    write_json(path, {"version": 1, "slices": slices})
+
+
+def run_slices(samples, plan: list[Slice], transcriber, checkpoint: Path | None, report=None) -> list[tuple[Slice, list[Word]]]:
+    """Transcribe `plan`, skipping a finished slice recorded in `checkpoint`.
+
+    Each finished slice is written before the next one starts. A slice with no speech,
+    or whose word alignment has no frames, is stored as no words and the episode continues.
+    """
+    saved = load_slice_checkpoint(checkpoint) if checkpoint is not None else {}
+    reused = sum(
+        1 for piece in plan
+        if (prior := saved.get(piece.index)) is not None and _slice_matches(prior, piece)
+    )
+    if reused:
+        log(f"resuming transcription, {reused} of {len(plan)} slices already finished")
+    results: list[tuple[Slice, list[Word]]] = []
+    finished: list[dict] = []
+    total = len(plan)
+    for piece in plan:
+        if report is not None:
+            report("transcribe", piece.index * 100 // total if total else 99)
+        prior = saved.get(piece.index)
+        if prior is not None and _slice_matches(prior, piece):
+            restored = _words_from_saved(prior)
+            if restored is not None:
+                results.append((piece, restored))
+                finished.append(prior)
+                continue
+        span = audio.span(samples, piece.start_ms, piece.end_ms)
+        log(f"transcribing slice {piece.index + 1}/{len(plan)}")
+        try:
+            words = transcribe_slice(transcriber, span)
+        except SliceSkipped as skipped:
+            log(f"skipping slice {piece.index + 1}/{len(plan)} ({skipped})")
+            words = []
+        row = {
+            "index": piece.index,
+            "startMs": piece.start_ms,
+            "endMs": piece.end_ms,
+            "keepStartMs": piece.keep_start_ms,
+            "keepEndMs": piece.keep_end_ms,
+            "region": piece.region,
+            "words": [_word_row(word) for word in words],
+        }
+        finished.append(row)
+        if checkpoint is not None:
+            save_slice_checkpoint(checkpoint, finished)
+        results.append((piece, words))
+    return results
+
+
+def transcribe(samples, language: str, report, transcript_words=None, checkpoint: Path | None = None) -> tuple[list, Tracks]:
     """Diarize, then either transcribe each slice or place `transcript_words` into the slices.
 
     `transcript_words` is absolute `(startMs, endMs, text)`. When it is set, no ASR model loads.
+    `checkpoint` is `slices.json`. A slice already recorded there is not transcribed again.
     """
     report("weights", 0)
     transcriber = None if transcript_words is not None else open_transcriber(language)
@@ -67,11 +156,7 @@ def transcribe(samples, language: str, report, transcript_words=None) -> tuple[l
             log(f"{dropped} transcript words started outside detected speech and were left out")
         report("transcribe", 99)
     else:
-        results = []
-        for piece in plan:
-            report("transcribe", piece.index * 100 // len(plan))
-            log(f"transcribing slice {piece.index + 1}/{len(plan)}")
-            results.append((piece, transcriber.transcribe(audio.span(samples, piece.start_ms, piece.end_ms))))
+        results = run_slices(samples, plan, transcriber, checkpoint, report)
     return build_cues(results, language), tracks
 
 
@@ -142,6 +227,8 @@ def start(source: str, language: str, root: Path, transcript_words=None, fresh: 
         try:
             report("weights", 0)  # before episode.json, so `episode` never sees a folder with neither
             episode.failed.unlink(missing_ok=True)
+            if fresh:
+                episode.slices.unlink(missing_ok=True)
             # createdAt is this run. An earlier failed start of the same audio leaves episode.json
             # behind; reusing that stamp made a later job look hours older than it was.
             started_at = now()
@@ -153,7 +240,9 @@ def start(source: str, language: str, root: Path, transcript_words=None, fresh: 
                 "createdAt": started_at,
                 "asr": asr_record(language, transcript_words is not None),
             })
-            cues, tracks = transcribe(samples, language, report, transcript_words)
+            cues, tracks = transcribe(
+                samples, language, report, transcript_words, checkpoint=episode.slices,
+            )
             if fresh:
                 retire_labels(episode)
             report("write", 99)
@@ -161,6 +250,7 @@ def start(source: str, language: str, root: Path, transcript_words=None, fresh: 
             write_text(episode.transcript, render_vtt(rows))
             write_json(episode.groups, group_table(rows))
             write_json(episode.cues, rows)  # last: its presence means the episode is ready
+            episode.slices.unlink(missing_ok=True)
             log(f"{len(rows)} cues, {len({row['groupId'] for row in rows})} groups")
         except BaseException as error:
             message = str(error) or type(error).__name__

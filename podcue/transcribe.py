@@ -116,6 +116,35 @@ def _finite(value: object, field: str) -> float:
     return float(value)
 
 
+class SliceSkipped(Exception):
+    """This slice has no usable words. The rest of the episode continues."""
+
+
+def transcribe_slice(transcriber: Transcriber, samples: np.ndarray) -> list[Word]:
+    """Words for one slice. Empty audio and a failed alignment are no words.
+
+    faster-whisper 1.2.1 `WhisperModel.find_alignment` builds
+    `jumps = np.pad(np.diff(text_indices), (1, 0), constant_values=1).astype(bool)`
+    and then indexes `time_indices[jumps]`. When `model.align` returns no pairs
+    (the window is shorter than the encoder stride, so there are no frames),
+    `time_indices` has shape `(0,)` and `jumps` has shape `(1,)`. NumPy raises
+    `IndexError: boolean index did not match indexed array along axis 0; size of
+    axis is 0 but size of corresponding boolean axis is 1`. That slice is skipped.
+    """
+    if samples.size == 0:
+        raise SliceSkipped("empty")
+    try:
+        return transcriber.transcribe(samples)
+    except IndexError as error:
+        if "boolean index did not match" in str(error):
+            raise SliceSkipped("no alignment frames") from error
+        raise
+    except ValueError as error:
+        if "word timestamps" in str(error):
+            raise SliceSkipped("speech without word timestamps") from error
+        raise
+
+
 def whisper_words(segments: list[dict]) -> list[Word]:
     """Words from faster-whisper segments. Silence has no segments.
 

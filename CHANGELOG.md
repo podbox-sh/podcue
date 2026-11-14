@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.7
+
+Not tagged and not published. The package metadata is `0.2.7`.
+
+- A Whisper slice with no speech, or whose word alignment has no frames, is skipped with a log line. `start` no longer dies with `boolean index did not match indexed array along axis 0` and throw away the slices already finished. That error is faster-whisper 1.2.1 `find_alignment` doing `time_indices[jumps]` when the alignment is empty: the jump mask has length 1 and the time array has length 0.
+- `slices.json` is written after each finished slice. A later `start` of the same episode continues from the last finished slice. `start --fresh` deletes the file first. It is removed once `cues.json` is written.
+- A `start.lock` or `write.lock` that is empty and older than 30 seconds, names a pid that is not running, or is older than 12 hours is taken over. A lock held by a live pid is still refused.
+- `av` is pinned to 18.1.0 on the `asr` and `recap` extras. faster-whisper 1.2.1 passes `metadata_errors` to `av.open`, and PyAV 19 removed that argument.
+
 ## 0.2.6
 
 Not tagged and not published. The package metadata is `0.2.6`.

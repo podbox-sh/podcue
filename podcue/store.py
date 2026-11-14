@@ -2,9 +2,11 @@
 
 Writes go through a temp file plus rename, so a reader never sees half a file. `start.lock`
 holds the pid of the running start under an flock and is removed when that command finishes,
-including when it fails. A crash can leave the file; the OS has already released the flock
-and the next start takes it. Read-modify-write commands (labels, summaries) hold `write.lock`
-for the length of one call and remove it the same way.
+including when it fails. A crash can leave the file. A later command takes a stale lock: the holder pid is dead,
+the file is empty and older than 30 seconds, or the file is older than 12 hours.
+Read-modify-write commands (labels, summaries) hold `write.lock` for one call and
+remove it the same way. `slices.json` is the transcription checkpoint and is removed
+when cues are written. `start --fresh` deletes it first.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ import json
 import os
 import re
 import secrets
+import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -22,6 +26,10 @@ import yaml
 EPISODE_ID = re.compile(r"^ep_[0-9a-f]{16}$")
 SUMMARY_ID = re.compile(r"^sm_[0-9a-f]{16}$")
 INTERRUPTED = "start was interrupted; run start again"
+# A start of a long episode can hold the lock for hours. Older than this, take it.
+STALE_LOCK_S = 12 * 60 * 60
+# An empty lock is the moment between flock and writing the pid, or a crashed older run.
+EMPTY_LOCK_S = 30
 
 
 def resolve_root(flag: str | None) -> Path:
@@ -44,6 +52,7 @@ class Episode:
         self.failed = self.dir / "failed.json"
         self.start_lock = self.dir / "start.lock"
         self.write_lock = self.dir / "write.lock"
+        self.slices = self.dir / "slices.json"
         self.summaries = self.dir / "summaries"
 
     def summary_file(self, summary_id: str) -> Path:
@@ -77,17 +86,69 @@ def read_json(path: Path) -> object | None:
         return None
 
 
-def try_lock(path: Path) -> int | None:
-    """Take the start lock and write our pid into it, or return None while another process holds it."""
+def _note(message: str) -> None:
+    print(f"podcue: {message}", file=sys.stderr, flush=True)
+
+
+def _write_pid(fd: int) -> None:
+    os.ftruncate(fd, 0)
+    os.write(fd, f"{os.getpid()}\n".encode())
+
+
+def _lock_nb(path: Path) -> int | None:
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         os.close(fd)
         return None
-    os.ftruncate(fd, 0)
-    os.write(fd, f"{os.getpid()}\n".encode())
     return fd
+
+
+def lock_is_stale(path: Path) -> str | None:
+    """Why a held lock should be taken, or None when its holder keeps it."""
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        return None
+    age = time.time() - info.st_mtime
+    pid = lock_pid(path)
+    if info.st_size == 0 and age >= EMPTY_LOCK_S:
+        return f"empty for {int(age)}s"
+    if pid is not None and not pid_alive(pid):
+        return f"pid {pid} is not running"
+    if age >= STALE_LOCK_S:
+        return f"older than {STALE_LOCK_S // 3600} hours"
+    return None
+
+
+def _take_over(path: Path, reason: str) -> int | None:
+    _note(f"taking over stale {path.name} ({reason})")
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    fd = _lock_nb(path)
+    if fd is None:
+        return None
+    _write_pid(fd)
+    return fd
+
+
+def try_lock(path: Path) -> int | None:
+    """Take the start lock and write our pid into it, or return None while another process holds it.
+
+    A stale lock is removed and taken: empty and older than 30 seconds, a dead pid, or
+    older than 12 hours.
+    """
+    fd = _lock_nb(path)
+    if fd is not None:
+        _write_pid(fd)
+        return fd
+    reason = lock_is_stale(path)
+    if reason is None:
+        return None
+    return _take_over(path, reason)
 
 
 def release(fd: int, path: Path) -> None:
@@ -137,17 +198,15 @@ def pid_alive(pid: int) -> bool:
 @contextlib.contextmanager
 def writing(episode: Episode):
     """Serialize read-modify-write calls on one episode."""
-    fd = os.open(episode.write_lock, os.O_RDWR | os.O_CREAT, 0o644)
-    acquired = False
-    try:
+    fd = try_lock(episode.write_lock)
+    if fd is None:
+        fd = os.open(episode.write_lock, os.O_RDWR | os.O_CREAT, 0o644)
         fcntl.flock(fd, fcntl.LOCK_EX)
-        acquired = True
+        _write_pid(fd)
+    try:
         yield
     finally:
-        if acquired:
-            _remove_lock(fd, episode.write_lock)
-        else:
-            os.close(fd)
+        _remove_lock(fd, episode.write_lock)
 
 
 def summary_ids(episode: Episode) -> list[str]:

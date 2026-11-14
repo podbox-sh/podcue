@@ -1,8 +1,10 @@
+import fcntl
 import hashlib
 import json
 import os
 import subprocess
 import sys
+import time
 import warnings
 
 import pytest
@@ -265,6 +267,91 @@ def test_usage_errors_are_one_json_line(capsys):
     assert code == 1 and result["kind"] == "error" and "episodeId" in result["message"]
     result, code = run(capsys, "nope")
     assert code == 1 and result["kind"] == "error"
+
+
+def test_a_young_empty_lock_still_blocks(engine, root, tmp_path, capsys):
+    wav = make_wav(tmp_path / "ep.wav")
+    folder = Episode(root, expected_id(wav)).dir
+    folder.mkdir(parents=True)
+    fd = os.open(folder / "start.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    os.ftruncate(fd, 0)
+    try:
+        result, code = run(capsys, "start", wav)
+    finally:
+        os.close(fd)
+    assert code == 1 and result["reason"] == "running"
+    assert engine.calls == 0
+
+
+def test_an_old_empty_lock_is_taken_over(engine, root, tmp_path, capsys):
+    wav = make_wav(tmp_path / "ep.wav")
+    folder = Episode(root, expected_id(wav)).dir
+    folder.mkdir(parents=True)
+    lock = folder / "start.lock"
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    os.ftruncate(fd, 0)
+    old = time.time() - 120
+    os.utime(lock, (old, old))
+    try:
+        code = cli_main(["start", str(wav)])
+        captured = capsys.readouterr()
+    finally:
+        os.close(fd)
+    assert code == 0, captured.out
+    assert "taking over stale start.lock" in captured.err
+    assert "empty for" in captured.err
+    assert engine.calls == 1
+    assert not lock.exists()
+
+
+def test_a_held_lock_with_a_dead_pid_is_taken_over(engine, root, tmp_path, capsys):
+    wav = make_wav(tmp_path / "ep.wav")
+    folder = Episode(root, expected_id(wav)).dir
+    folder.mkdir(parents=True)
+    lock = folder / "start.lock"
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    os.ftruncate(fd, 0)
+    os.write(fd, f"{dead_pid()}\n".encode())
+    try:
+        code = cli_main(["start", str(wav)])
+        captured = capsys.readouterr()
+    finally:
+        os.close(fd)
+    assert code == 0, captured.out
+    assert "taking over stale start.lock" in captured.err
+    assert "is not running" in captured.err
+    assert engine.calls == 1
+
+
+def test_an_old_empty_write_lock_is_taken_over(tmp_path, capsys):
+    episode = Episode(tmp_path, "ep_" + "ab" * 8)
+    episode.dir.mkdir(parents=True)
+    fd = os.open(episode.write_lock, os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    os.ftruncate(fd, 0)
+    old = time.time() - 120
+    os.utime(episode.write_lock, (old, old))
+    try:
+        with writing(episode):
+            assert episode.write_lock.read_text().strip() == str(os.getpid())
+    finally:
+        os.close(fd)
+    assert "taking over stale write.lock" in capsys.readouterr().err
+    assert not episode.write_lock.exists()
+
+
+def test_fresh_discards_a_slice_checkpoint(engine, root, tmp_path, capsys):
+    wav = make_wav(tmp_path / "ep.wav")
+    started, code = run(capsys, "start", wav)
+    assert code == 0
+    episode = Episode(root, started["episode"]["episodeId"])
+    episode.slices.write_text('{"version": 1, "slices": [{"index": 0}]}\n', encoding="utf-8")
+    again, code = run(capsys, "start", wav, "--fresh")
+    assert code == 0 and again["created"] is True
+    assert not episode.slices.exists()
 
 
 def test_unknown_episode(root, capsys):

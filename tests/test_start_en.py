@@ -76,3 +76,37 @@ def test_transcript_start_produces_cues(tmp_path, monkeypatch, capsys):
     heard = " ".join(cue["text"] for cue in cues)
     assert "podcue" in heard
     print("TRANSCRIPT_CUES", json.dumps([cue["text"] for cue in cues], ensure_ascii=False))
+
+
+def test_faster_whisper_decodes_a_wav(tmp_path):
+    """PyAV 19 removed av.open(metadata_errors=...). faster-whisper 1.2.1 still passes it."""
+    _require_live()
+    faster_whisper = pytest.importorskip("faster_whisper")
+    from faster_whisper.audio import decode_audio
+
+    wav = tmp_path / "tone.wav"
+    with wave.open(str(wav), "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(16_000)
+        writer.writeframes(b"\x00\x10" * 16_000)
+    decoded = decode_audio(str(wav), sampling_rate=16_000)
+    assert decoded.shape[0] > 1_000
+    assert faster_whisper.audio.decode_audio is decode_audio
+
+
+def test_real_whisper_skips_empty_short_and_noise_slices():
+    _require_live()
+    pytest.importorskip("faster_whisper")
+    import numpy as np
+
+    from podcue.transcribe import WhisperTranscriber, transcribe_slice
+
+    transcriber = WhisperTranscriber("en")
+    silence = np.zeros(8_000, dtype=np.float32)
+    tone = np.sin(2 * np.pi * 440 * np.arange(16_000) / 16_000).astype(np.float32)
+    noise = np.random.default_rng(1).standard_normal(16_000).astype(np.float32) * 0.05
+    empty = np.zeros(0, dtype=np.float32)
+    for samples in (empty, silence, tone, noise):
+        words = transcribe_slice(transcriber, samples)
+        assert isinstance(words, list)
