@@ -71,7 +71,6 @@ def _slice_matches(saved: dict, piece: Slice) -> bool:
 
 
 def load_slice_checkpoint(path: Path, audio_id: str, language: str) -> dict[int, dict]:
-    """Finished slices for this audio and language. A mismatch starts over."""
     stored = read_json(path)
     if not isinstance(stored, dict):
         return {}
@@ -101,11 +100,6 @@ def run_slices(
     samples, plan: list[Slice], transcriber, checkpoint: Path | None, report=None,
     audio_id: str = "", language: str = "",
 ) -> list[tuple[Slice, list[Word]]]:
-    """Transcribe `plan`, skipping a finished slice recorded in `checkpoint`.
-
-    Each finished slice is written before the next one starts. A slice with no speech,
-    or whose word alignment has no frames, is stored as no words and the episode continues.
-    """
     saved = load_slice_checkpoint(checkpoint, audio_id, language) if checkpoint is not None else {}
     reused = sum(
         1 for piece in plan
@@ -156,7 +150,6 @@ def transcribe(
     """Diarize, then either transcribe each slice or place `transcript_words` into the slices.
 
     `transcript_words` is absolute `(startMs, endMs, text)`. When it is set, no ASR model loads.
-    `checkpoint` is `slices.json`. A slice already recorded there is not transcribed again.
     """
     report("weights", 0)
     transcriber = None if transcript_words is not None else open_transcriber(language)

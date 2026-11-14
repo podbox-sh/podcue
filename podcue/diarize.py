@@ -91,11 +91,6 @@ def chunk_audio(audio: np.ndarray, start: int) -> np.ndarray:
 
 
 def take_mask(values: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Boolean-index axis 0. A mask that is not the same length is empty, not an error.
-
-    The same shape mismatch crashes faster-whisper when an alignment has no frames:
-    a length-1 jump mask applied to a length-0 time array.
-    """
     if mask.ndim != 1 or values.shape[:1] != mask.shape:
         return np.empty((0, *values.shape[1:]), dtype=values.dtype)
     return values[mask]

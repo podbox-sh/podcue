@@ -14,7 +14,7 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 import numpy as np
 
@@ -118,20 +118,12 @@ def _finite(value: object, field: str) -> float:
 
 @dataclass(frozen=True)
 class SliceOutcome:
-    """What one slice produced, after the model boundary.
-
-    `done` means the model returned. `skipped-empty` means there was nothing to align.
-    A crash is not a state. That slice stays pending and the next start tries it again.
-    """
-
-    state: str
+    state: Literal["done", "skipped-empty"]
     words: tuple[Word, ...]
 
 
 def transcribe_slice(transcriber: Transcriber, samples: np.ndarray) -> SliceOutcome:
-    """Words for one slice. Empty audio and a failed alignment are no words.
-
-    faster-whisper 1.2.1 `WhisperModel.find_alignment` builds
+    """faster-whisper 1.2.1 `WhisperModel.find_alignment` builds
     `jumps = np.pad(np.diff(text_indices), (1, 0), constant_values=1).astype(bool)`
     and then indexes `time_indices[jumps]`. When `model.align` returns no pairs
     (the window is shorter than the encoder stride, so there are no frames),

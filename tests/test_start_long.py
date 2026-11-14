@@ -1,8 +1,3 @@
-"""A few minutes of tones and silence through a real start. CI sets PODCUE_LIVE_EN=1.
-
-Marked slow. The unit job ignores this file. The stability job runs it.
-"""
-
 import os
 import shutil
 import subprocess
@@ -41,7 +36,6 @@ def _speech(path: Path, seconds: int) -> None:
 
 
 def _long_wav(directory: Path) -> Path:
-    """About three minutes: speech, noise, and tones, with silent gaps between them."""
     parts = []
     pieces = [
         ("speech", 30),

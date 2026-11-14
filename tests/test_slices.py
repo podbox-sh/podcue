@@ -1,5 +1,3 @@
-"""Slice skips and the transcription checkpoint. No model weights."""
-
 import numpy as np
 import pytest
 
@@ -68,7 +66,7 @@ def test_empty_short_and_noise_slices_are_not_fatal():
             return []
 
     empty = np.zeros(0, dtype=np.float32)
-    short = np.zeros(8_000, dtype=np.float32)  # 0.5 s
+    short = np.zeros(8_000, dtype=np.float32)
     tone = np.sin(2 * np.pi * 440 * np.arange(16_000) / 16_000).astype(np.float32)
     noise = np.random.default_rng(0).standard_normal(16_000).astype(np.float32) * 0.1
     assert transcribe_slice(Record(), empty).state == "skipped-empty"
@@ -176,7 +174,6 @@ def test_a_checkpoint_for_other_audio_is_not_resumed(tmp_path):
 
 
 def test_degenerate_slices_run_through_without_aborting(tmp_path):
-    """Empty, silence, sub-second, tone, noise, clipped, and an end-of-file boundary."""
     rate = 16_000
     rng = np.random.default_rng(0)
     silence = np.zeros(rate // 2, dtype=np.float32)
@@ -192,7 +189,6 @@ def test_degenerate_slices_run_through_without_aborting(tmp_path):
         cursor += len(piece)
         end = cursor * 1000 // rate
         plan.append(Slice(index, start, end, start, end, 0))
-    # A slice whose end is the last sample.
     plan.append(Slice(len(plan), (len(samples) - 160) * 1000 // rate, len(samples) * 1000 // rate,
                       (len(samples) - 160) * 1000 // rate, len(samples) * 1000 // rate, 0))
 
@@ -212,7 +208,7 @@ def test_degenerate_slices_run_through_without_aborting(tmp_path):
     model = Touchy()
     results = run_slices(samples, plan, model, tmp_path / "slices.json", audio_id="ep_fuzz", language="en")
     assert len(results) == len(plan)
-    assert model.calls == len(plan) - 1  # the empty piece never reaches the model
+    assert model.calls == len(plan) - 1
     again = Touchy()
     rerun = run_slices(samples, plan, again, tmp_path / "slices.json", audio_id="ep_fuzz", language="en")
     assert again.calls == 0
