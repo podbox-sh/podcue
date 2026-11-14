@@ -1,10 +1,11 @@
 """The episode folder. Every piece of state lives in a file here; there is no other process.
 
 Writes go through a temp file plus rename, so a reader never sees half a file. `start.lock`
-holds the pid of the running start under an flock and is removed when that command finishes,
-including when it fails. A crash can leave the file; the OS has already released the flock
-and the next start takes it. Read-modify-write commands (labels, summaries) hold `write.lock`
-for the length of one call and remove it the same way.
+and `write.lock` are flocks. The files stay after the command finishes. Removing one would
+let a new flock succeed on a new inode while another process, including a child that
+inherited the fd, still held the old one. A crash drops the flock with the last process
+that had the fd, and the next command locks the same file. Whether a start is running is
+`status.json` plus a live pid, not the presence of the lock file.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ import json
 import os
 import re
 import secrets
+import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -44,6 +47,7 @@ class Episode:
         self.failed = self.dir / "failed.json"
         self.start_lock = self.dir / "start.lock"
         self.write_lock = self.dir / "write.lock"
+        self.slices = self.dir / "slices.json"
         self.summaries = self.dir / "summaries"
 
     def summary_file(self, summary_id: str) -> Path:
@@ -77,42 +81,78 @@ def read_json(path: Path) -> object | None:
         return None
 
 
-def try_lock(path: Path) -> int | None:
-    """Take the start lock and write our pid into it, or return None while another process holds it."""
+def _note(message: str) -> None:
+    print(f"podcue: {message}", file=sys.stderr, flush=True)
+
+
+def _write_pid(fd: int) -> None:
+    os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.write(fd, f"{os.getpid()}\n".encode())
+
+
+def _pid_on_fd(fd: int) -> int | None:
+    os.lseek(fd, 0, os.SEEK_SET)
+    text = os.read(fd, 64).decode().strip()
+    return int(text) if text.isdigit() else None
+
+
+def _lock_nb(path: Path) -> int | None:
+    """Lock the file at `path`, or return None while a live holder has it.
+
+    The file's age is not consulted. A long start, or a laptop that slept, does
+    not make this fail open.
+    """
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         os.close(fd)
         return None
-    os.ftruncate(fd, 0)
-    os.write(fd, f"{os.getpid()}\n".encode())
+    return fd
+
+
+def _log_if_crashed(fd: int, path: Path) -> None:
+    """Log when the file still names a pid that is not running.
+
+    A clean `release` truncates the file, so this line means the holder did not
+    finish. Bytes that are not a pid are ignored. The read only feeds the log.
+    """
+    try:
+        previous = _pid_on_fd(fd)
+        if previous is not None and previous != os.getpid() and not pid_alive(previous):
+            _note(f"replacing {path.name} left by pid {previous}")
+    except (UnicodeDecodeError, ValueError, OverflowError):
+        return
+
+
+def try_lock(path: Path) -> int | None:
+    """Take the lock and write our pid into it, or return None while another process holds it.
+
+    A pid left in the file does not grant the lock. The flock does. A child that
+    inherited the fd is a live holder until it exits. The pid in the file can be
+    the dead parent, and that does not make the lock free.
+    """
+    fd = _lock_nb(path)
+    if fd is None:
+        return None
+    try:
+        _log_if_crashed(fd, path)
+        _write_pid(fd)
+    except BaseException:
+        os.close(fd)
+        raise
     return fd
 
 
 def release(fd: int, path: Path) -> None:
-    """Drop a lock this process holds and remove its file."""
-    _remove_lock(fd, path)
-
-
-def _remove_lock(fd: int, path: Path) -> None:
-    """Unlink `path` while `fd` still holds it, then close `fd`.
-
-    The inode check leaves a newer lock file alone if one replaced this one.
-    """
+    """Drop the flock, clear the pid, and leave `path` where it is."""
     try:
-        held = os.fstat(fd)
-        current = os.stat(path)
-    except OSError:
-        os.close(fd)
-        return
-    try:
-        if held.st_ino == current.st_ino and held.st_dev == current.st_dev:
-            os.unlink(path)
-    except FileNotFoundError:
-        pass
+        os.ftruncate(fd, 0)
     finally:
         os.close(fd)
+    if not path.exists():
+        _note(f"{path.name} disappeared while its lock was released")
 
 
 def lock_pid(path: Path) -> int | None:
@@ -137,17 +177,15 @@ def pid_alive(pid: int) -> bool:
 @contextlib.contextmanager
 def writing(episode: Episode):
     """Serialize read-modify-write calls on one episode."""
-    fd = os.open(episode.write_lock, os.O_RDWR | os.O_CREAT, 0o644)
-    acquired = False
+    while True:
+        fd = try_lock(episode.write_lock)
+        if fd is not None:
+            break
+        time.sleep(0.05)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        acquired = True
         yield
     finally:
-        if acquired:
-            _remove_lock(fd, episode.write_lock)
-        else:
-            os.close(fd)
+        release(fd, episode.write_lock)
 
 
 def summary_ids(episode: Episode) -> list[str]:

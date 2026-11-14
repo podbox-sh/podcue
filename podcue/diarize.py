@@ -90,6 +90,12 @@ def chunk_audio(audio: np.ndarray, start: int) -> np.ndarray:
     return padded
 
 
+def take_mask(values: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    if mask.ndim != 1 or values.shape[:1] != mask.shape:
+        return np.empty((0, *values.shape[1:]), dtype=values.dtype)
+    return values[mask]
+
+
 def speaker_samples(chunk: np.ndarray, classes: np.ndarray, speaker: int) -> np.ndarray:
     """Samples where one local speaker talks, alone when there is enough of that."""
     active = np.zeros(CHUNK, dtype=bool)
@@ -106,7 +112,7 @@ def speaker_samples(chunk: np.ndarray, classes: np.ndarray, speaker: int) -> np.
     chosen = clean if int(clean.sum()) > 400 else active
     if int(chosen.sum()) <= 400:
         return np.empty(0, dtype=np.float32)
-    return chunk[chosen]
+    return take_mask(chunk, chosen)
 
 
 def centroid_merges(unit: np.ndarray) -> list[tuple[int, int, float]]:
@@ -231,12 +237,13 @@ def cluster_windows(vectors: np.ndarray) -> tuple[np.ndarray, list[list[float]]]
     flat = vectors.reshape(-1, EMBEDDING_SIZE)
     finite = np.isfinite(flat).all(axis=1)
     labels = np.full(flat.shape[0], -2, dtype=np.int32)
-    points = flat[finite]
+    points = take_mask(flat, finite)
     if len(points) == 0:
         return labels.reshape(vectors.shape[:2]), []
     norms = np.maximum(np.linalg.norm(points, axis=1, keepdims=True), 1e-12)
     compact, centroids = cluster_unit(points / norms)
-    labels[finite] = compact
+    if finite.shape == labels.shape and int(finite.sum()) == len(compact):
+        labels[finite] = compact
     return labels.reshape(vectors.shape[:2]), [[float(value) for value in row] for row in centroids]
 
 

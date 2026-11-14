@@ -76,3 +76,50 @@ def test_transcript_start_produces_cues(tmp_path, monkeypatch, capsys):
     heard = " ".join(cue["text"] for cue in cues)
     assert "podcue" in heard
     print("TRANSCRIPT_CUES", json.dumps([cue["text"] for cue in cues], ensure_ascii=False))
+
+
+def test_faster_whisper_decodes_a_wav(tmp_path):
+    """PyAV 19 removed av.open(metadata_errors=...). faster-whisper 1.2.1 still passes it."""
+    _require_live()
+    faster_whisper = pytest.importorskip("faster_whisper")
+    from faster_whisper.audio import decode_audio
+
+    wav = tmp_path / "tone.wav"
+    with wave.open(str(wav), "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(16_000)
+        writer.writeframes(b"\x00\x10" * 16_000)
+    decoded = decode_audio(str(wav), sampling_rate=16_000)
+    assert decoded.shape[0] > 1_000
+    assert faster_whisper.audio.decode_audio is decode_audio
+
+
+def test_real_whisper_skips_a_one_frame_slice_and_keeps_going():
+    """10 ms of audio makes faster-whisper align with num_frames=1 and raise."""
+    _require_live()
+    pytest.importorskip("faster_whisper")
+    import numpy as np
+
+    from podcue.pipeline import run_slices
+    from podcue.regions import Slice
+    from podcue.transcribe import WhisperTranscriber
+
+    transcriber = WhisperTranscriber("en")
+    one_frame = np.zeros(160, dtype=np.float32)
+    silence = np.zeros(8_000, dtype=np.float32)
+    tone = np.sin(2 * np.pi * 440 * np.arange(16_000) / 16_000).astype(np.float32)
+    noise = np.random.default_rng(1).standard_normal(16_000).astype(np.float32) * 0.05
+    pieces = [np.zeros(0, dtype=np.float32), one_frame, silence, tone, noise]
+    samples = np.concatenate(pieces)
+    plan = []
+    cursor = 0
+    for index, piece in enumerate(pieces):
+        start = cursor * 1000 // 16_000
+        cursor += len(piece)
+        end = cursor * 1000 // 16_000
+        plan.append(Slice(index, start, end, start, end, 0))
+    results = run_slices(samples, plan, transcriber, None, audio_id="live", language="en")
+    assert len(results) == len(plan)
+    assert results[0][1] == []
+    assert results[1][1] == []

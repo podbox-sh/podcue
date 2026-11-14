@@ -8,6 +8,7 @@ the evidence directory before the isolated --root is removed.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shlex
@@ -86,10 +87,19 @@ def doctor(podcue: list[str]) -> str:
     return version.stdout.strip()
 
 
-def no_locks(root: Path) -> None:
-    found = sorted(path for path in root.rglob("*") if path.name.endswith(".lock"))
-    if found:
-        fail("lock files still present: " + ", ".join(str(path) for path in found))
+def locks_are_free(root: Path) -> None:
+    """A finished command drops the flock and leaves the file."""
+    held = []
+    for path in sorted(item for item in root.rglob("*") if item.name.endswith(".lock")):
+        fd = os.open(path, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            held.append(str(path))
+        finally:
+            os.close(fd)
+    if held:
+        fail("lock still held: " + ", ".join(held))
 
 
 def podcue_json(podcue: list[str], args: list[str], root: Path, name: str) -> dict:
@@ -113,7 +123,7 @@ def podcue_json(podcue: list[str], args: list[str], root: Path, name: str) -> di
     if not isinstance(payload, dict) or payload.get("kind") == "error":
         fail(f"{name} error result: {stdout}")
     (EVIDENCE / f"{name}.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    no_locks(root)
+    locks_are_free(root)
     return payload
 
 
@@ -226,7 +236,7 @@ def drive(podcue: list[str], root: Path) -> None:
         fail(f"start --fresh did not recompute the episode: {fresh}")
     if fresh["episode"]["episodeId"] != episode_id:
         fail("start --fresh wrote a different episode")
-    no_locks(root)
+    locks_are_free(root)
     print(
         f"verify-podcue ok: episode {episode_id}, recap {recap_seconds:.1f}s, "
         + ", ".join(lufs_lines),

@@ -34,6 +34,8 @@ faster-whisper 1.2.1 and CTranslate2 4.9.0 (speech-to-text for en de fr es it nl
     revision 536b0662742c02347bc0e980a01041f333bce120
     model.bin 483546902 bytes, sha256 3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671
   Inference is CPU int8. Podcue does not send a Hugging Face token.
+  PyAV (av) 18.1.0 decodes audio for faster-whisper. https://github.com/PyAV-Org/PyAV
+  License: BSD-3-Clause. Pinned below 19 because 1.2.1 passes metadata_errors to av.open.
 
 Moonshine (ja, ko, zh only; optional `moonshine` extra)
   Downloaded by the moonshine-voice package. The non-English Moonshine models are

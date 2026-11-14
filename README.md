@@ -33,11 +33,11 @@ Each write is validated when it's made, so there is no fix loop. `podcue check` 
 `fetch` and `build` need the `recap` extra. `start`, `cues`, and `label-groups` are unchanged; installing the extra is enough to run the whole recap, because the extra is a superset of the base package.
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue fetch https://example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue start ./ep/audio.wav
-uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
-uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
-uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue fetch https://example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue start ./ep/audio.wav
+uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
+uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
+uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 Pass `--python 3.12`. Kokoro 0.9.4 declares `Requires-Python: <3.13`. A direct media URL downloads without yt-dlp; a page URL needs it, from the same extra. Plain `uvx podcue` does not install the extra, so transcription stays light.
@@ -213,8 +213,8 @@ It fails, listing every problem, when:
 ### `podcue fetch <URL> [--out DIR]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
 ```
 
 ```json
@@ -229,7 +229,7 @@ uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue fetch https://www.youtube
 ### `podcue build <episodeId> <script.json> [--out FILE]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.6" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 ```json
@@ -301,11 +301,12 @@ This is optional. It downloads the two pinned diarization weight files now inste
   recap-cache/        narration and clip wavs reused by a later build of the same segment
   status.json         only while a start runs; removed when it ends
   failed.json         only after a failed start; removed by the next start
-  start.lock          only while a start runs; removed when the command finishes
-  write.lock          only while a label or summary write runs; removed when it finishes
+  start.lock          flock while a start runs; the file stays after it finishes
+  write.lock          flock while a label or summary write runs; the file stays after it finishes
+  slices.json         transcription checkpoint; removed when cues.json is written
 ```
 
-Every file is written to a temp file and renamed into place, so a reader never sees half a file. The only coordination is the two lock files. `start.lock` is held with `flock` and holds the pid. `write.lock` is held the same way for one label or summary write. Both files are removed when the command finishes, including when it fails. A crash can leave the file. The OS has already released the flock, and the next command takes it and removes it when it finishes.
+Every file is written to a temp file and renamed into place, so a reader never sees half a file. The only coordination is the two lock files. `start.lock` is held with `flock` and holds the pid. `write.lock` is held the same way for one label or summary write. The files stay after the command finishes, including when it fails. Removing them would let a new process lock a new inode while another process still held the old one. A crash drops the flock when the last process with that fd exits and leaves the pid in the file. A clean finish clears that pid. The next command logs a replacement only when a pid is still there and that process is not running. A lock file that is not a pid does not abort the command. A flock a live process still holds is refused. The file's mtime is not read, so hours of runtime or a laptop sleeping do not make it free. A child that inherited the fd is that live holder until the child exits. `episode` reports a start as running only when `status.json` names a live pid that matches `start.lock`. `slices.json` records each finished transcription slice so a killed `start` continues there. `start --fresh` deletes that file first.
 
 | File | Schema |
 | --- | --- |
@@ -361,7 +362,7 @@ On first use podcue downloads two pinned ONNX files into the user cache director
 
 - **ECAPA:** an ECAPA-TDNN512 trained with [WeSpeaker](https://github.com/wenet-e2e/wespeaker) (Apache-2.0 code) on VoxCeleb. Credit for the CC BY 4.0 weights goes to VoxCeleb (Nagrani, Chung, Xie, Zisserman), https://www.robots.ox.ac.uk/~vgg/data/voxceleb/. The model card has no license field. WeSpeaker says pretrained models follow the license of their training data, so the CC BY 4.0 attribution travels with the file.
 - **Segmentation:** pyannote segmentation-3.0 powerset model, MIT license.
-- **Speech-to-text (`en de fr es it nl pl`):** [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 1.2.1 with [CTranslate2](https://github.com/OpenNMT/CTranslate2) 4.9.0, the `asr` extra. Both are MIT. English uses `Systran/faster-whisper-small.en` at `d1d751a5f8271d482d14ca55d9e2deeebbae577f` (`model.bin` 483,545,366 bytes, sha256 `62b2a45b05ee59acb4a5341b33ee35e041395d378d418a18acfe4c9e768ee37a`). German, French, Spanish, Italian, Dutch and Polish use `Systran/faster-whisper-small` at `536b0662742c02347bc0e980a01041f333bce120` (`model.bin` 483,546,902 bytes, sha256 `3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671`). Those are OpenAI Whisper small weights converted by Systran, MIT, run on CPU at int8. `podcue[recap]` includes this extra. `ja ko zh` stay on Moonshine.
+- **Speech-to-text (`en de fr es it nl pl`):** [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 1.2.1 with [CTranslate2](https://github.com/OpenNMT/CTranslate2) 4.9.0, the `asr` extra. Both are MIT. English uses `Systran/faster-whisper-small.en` at `d1d751a5f8271d482d14ca55d9e2deeebbae577f` (`model.bin` 483,545,366 bytes, sha256 `62b2a45b05ee59acb4a5341b33ee35e041395d378d418a18acfe4c9e768ee37a`). German, French, Spanish, Italian, Dutch and Polish use `Systran/faster-whisper-small` at `536b0662742c02347bc0e980a01041f333bce120` (`model.bin` 483,546,902 bytes, sha256 `3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671`). Those are OpenAI Whisper small weights converted by Systran, MIT, run on CPU at int8. `podcue[recap]` includes this extra. PyAV is pinned to 18.1.0 because faster-whisper 1.2.1 passes `metadata_errors` to `av.open`, which PyAV 19 removed. `ja ko zh` stay on Moonshine.
 - **Moonshine (`ja ko zh` only):** moonshine-voice 0.1.5, from the `moonshine` extra, downloads the model into `<cache>/moonshine` and verifies it against its own CRC32C catalog. The non-English Moonshine models are under the non-commercial [Moonshine Community License](https://www.moonshine.ai/license). Those terms apply only when you run with `--language ja|ko|zh`. No other language is routed to Moonshine.
 
 The weights are not part of this package and are not covered by its MIT license. See [NOTICE](NOTICE).
@@ -385,9 +386,9 @@ The `moonshine` extra is separate and unchanged: its non-English models are non-
 
 ```sh
 uv run pytest                                  # unit tests + smoke test
-uv run pytest --ignore tests/test_smoke.py --ignore tests/test_start_en.py --ignore tests/test_build_en.py
+uv run pytest --ignore tests/test_smoke.py --ignore tests/test_start_en.py --ignore tests/test_build_en.py --ignore tests/test_start_long.py
 uv run --extra moonshine pytest tests/test_smoke.py
-PODCUE_LIVE_EN=1 uv run --extra asr pytest tests/test_start_en.py
+PODCUE_LIVE_EN=1 uv run --extra asr pytest tests/test_start_en.py tests/test_start_long.py
 PODCUE_LIVE_EN=1 uv run --python 3.12 --extra recap pytest tests/test_build_en.py
 # Full pipeline from the built wheel (CI job `stability` runs this same file):
 python3 .cursor/skills/verify-podcue/drive.py
@@ -403,7 +404,9 @@ Bump `version` in `pyproject.toml` and `__version__` in `podcue/__init__.py` to 
 
 Create a GitHub release tagged `v` plus that version, for example `v0.2.1`. Publishing the release runs [publish.yml](.github/workflows/publish.yml). It builds the sdist and wheel, checks that the built version matches the tag with a leading `v` removed, and publishes to PyPI with trusted publishing. The workflow stores no PyPI token. Running the workflow by hand (`workflow_dispatch`) publishes the selected commit the same way, without the tag check.
 
-0.2.6 is the package version on this branch. It is not tagged and not published. See [CHANGELOG.md](CHANGELOG.md). Narration is written as 16-bit WAV before the loudness pass, lock files are removed when a command finishes, and Kokoro's torch warnings stay off during `build`.
+0.2.7 is the package version on this branch. It is not tagged and not published. See [CHANGELOG.md](CHANGELOG.md). A Whisper slice with no alignment frames is skipped, `slices.json` lets `start` resume, and lock files stay in place so the flock is the only lock. `av` 18.1.0 stays installed next to faster-whisper 1.2.1.
+
+0.2.6 writes narration as 16-bit WAV, removes lock files when a command finishes, and keeps Kokoro's torch warnings off during `build`.
 
 0.2.5, which is not yet published, stores a local source path as absolute, downloads a pinned spaCy model for English narration, levels that narration when it is synthesized, and `start --fresh` moves `labels.json` aside.
 

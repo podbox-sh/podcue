@@ -1,7 +1,9 @@
 """A fake engine for command tests: WAV inputs are "converted" by copying, and the models are
 replaced by a fixed set of 120 cues in three groups (gc0001, gc0002, ungrouped)."""
 
+import fcntl
 import json
+import os
 import shutil
 import wave
 
@@ -28,6 +30,19 @@ def make_wav(path, seed=0):
     return path
 
 
+def assert_lock_released(path):
+    """The lock file stays, and no process holds its flock."""
+    if not path.exists():
+        raise AssertionError(f"{path.name} should stay after the command finishes")
+    fd = os.open(path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        raise AssertionError(f"{path.name} is still held") from error
+    finally:
+        os.close(fd)
+
+
 def run(capsys, *argv):
     """Run one command and return (parsed stdout line, exit code). Asserts exactly one line."""
     code = cli.main([str(arg) for arg in argv])
@@ -42,7 +57,7 @@ class Engine:
         self.during = None  # called inside a fake transcribe, after the first progress report
         self.error = None
 
-    def transcribe(self, samples, language, report, transcript_words=None):
+    def transcribe(self, samples, language, report, transcript_words=None, checkpoint=None, audio_id=""):
         self.calls += 1
         report("diarize", 0)
         if self.during is not None:

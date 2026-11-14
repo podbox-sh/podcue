@@ -14,7 +14,7 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 import numpy as np
 
@@ -114,6 +114,36 @@ def _finite(value: object, field: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
         raise ValueError(f"transcriber field {field} must be a non-negative finite number, got {value!r}")
     return float(value)
+
+
+@dataclass(frozen=True)
+class SliceOutcome:
+    state: Literal["done", "skipped-empty"]
+    words: tuple[Word, ...]
+
+
+def transcribe_slice(transcriber: Transcriber, samples: np.ndarray) -> SliceOutcome:
+    """faster-whisper 1.2.1 `WhisperModel.find_alignment` builds
+    `jumps = np.pad(np.diff(text_indices), (1, 0), constant_values=1).astype(bool)`
+    and then indexes `time_indices[jumps]`. When `model.align` returns no pairs
+    (the window is shorter than the encoder stride, so there are no frames),
+    `time_indices` has shape `(0,)` and `jumps` has shape `(1,)`. NumPy raises
+    `IndexError: boolean index did not match indexed array along axis 0; size of
+    axis is 0 but size of corresponding boolean axis is 1`. That slice is skipped.
+    """
+    if samples.size == 0:
+        return SliceOutcome("skipped-empty", ())
+    try:
+        words = transcriber.transcribe(samples)
+    except IndexError as error:
+        if "size of axis is 0 but size of corresponding boolean axis is 1" in str(error):
+            return SliceOutcome("skipped-empty", ())
+        raise
+    except ValueError as error:
+        if "word timestamps" in str(error):
+            return SliceOutcome("skipped-empty", ())
+        raise
+    return SliceOutcome("done", tuple(words))
 
 
 def whisper_words(segments: list[dict]) -> list[Word]:

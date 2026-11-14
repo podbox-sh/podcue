@@ -29,3 +29,4 @@ This directory is the maintained source for verifying the podcue CLI. Read the i
 - [start](./start.md) turns the 75-second clip into an episode with cues. `start --fresh` recomputes that episode.
 - [label-groups](./label-groups.md) names a diarized group.
 - [build](./build.md) narrates with Kokoro, cuts one clip, and writes `recap.mp3`.
+- [resume](./resume.md) continues a killed `start` from `slices.json`. A lock file whose holder has exited does not block the next command.

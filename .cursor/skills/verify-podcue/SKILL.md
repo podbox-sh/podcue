@@ -51,7 +51,7 @@ Order, against the isolated `--root` and the committed 75-second clip:
 
 `script.json` has two narration lines, `About 400,000 people know this address.` and `The excerpt is 2.4% of a full hour.`, and one clip of about 12 seconds taken from the first cue. The group id comes from the `start` JSON. `uncertain`, `mixed`, and `ungrouped` are skipped when another group exists.
 
-Each command must exit 0 and print one JSON object that is not `{"kind":"error",...}`. After each command, the root must contain no `*.lock` file. `start` must report `created: true` and `asr.engine` `faster-whisper`. `cues` and `label-groups` must report `state: present`. `build` must report `kind: built`.
+Each command must exit 0 and print one JSON object that is not `{"kind":"error",...}`. After each command, no process holds a `*.lock` file. The files may remain. `start` must report `created: true` and `asr.engine` `faster-whisper`. `cues` and `label-groups` must report `state: present`. `build` must report `kind: built`.
 
 ## Evidence
 

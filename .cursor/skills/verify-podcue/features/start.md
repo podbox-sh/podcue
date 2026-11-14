@@ -8,7 +8,7 @@
 - `start-asr` records `asr.engine` `faster-whisper` for `--language en`.
 - `start-cues` makes `podcue cues` return the cue text.
 - `start-fresh` recomputes the same episode id and moves `labels.json` aside when labels exist.
-- `start-locks` leaves no `*.lock` file after the command exits.
+- `start-locks` leaves `start.lock` unheld after the command exits. The file stays.
 
 ## How to get to it (user POV)
 
@@ -27,7 +27,7 @@ Preconditions:
 - **Create the episode.** Run `podcue --root <root> start tests/fixtures/gettysburg-75s.mp3 --language en`. Exit 0. Stdout is one JSON object with `kind` `started`, `created` true, and `episode.asr.engine` `faster-whisper`. `episode.episodeId` looks like `ep_` plus 16 hex digits.
 - **Read the cues.** Run `podcue --root <root> cues <episodeId> --limit 200`. Exit 0. `state` is `present` and `cues` is a non-empty array. At least one cue has non-empty `text`.
 - **Recompute.** Run `podcue --root <root> start tests/fixtures/gettysburg-75s.mp3 --language en --fresh`. Exit 0. `created` is true and `episodeId` is unchanged.
-- **Proof.** Save stdout to `verify-podcue-evidence/start.json` and `verify-podcue-evidence/start-fresh.json`. The episode directory contains no file whose name ends in `.lock`.
+- **Proof.** Save stdout to `verify-podcue-evidence/start.json` and `verify-podcue-evidence/start-fresh.json`. `start.lock` may remain. Nothing holds its flock.
 
 ## Gotchas
 
@@ -35,4 +35,4 @@ Preconditions:
 - The episode id is the hash of the converted wav. A different file, or a different trim, is a different episode.
 - `start --fresh` deletes the effect of `label-groups` by moving `labels.json` to `labels.prev.json`. Run it after build when the journey must see the label on the recap.
 - Speech the diarizer misses is not transcribed. An empty `cues` array is a failed start, not a reason to invent cue times.
-- A crash can leave `start.lock`. A finished command, including a failed one, removes it. Do not delete locks by killing a process named `podcue`.
+- A crash drops the flock when the last process with that fd exits. The file stays. Do not delete locks by killing a process named `podcue`.
