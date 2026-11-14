@@ -435,6 +435,18 @@ def test_build_flags_length_on_the_padded_clip(episode_id, root, audio_ops, tmp_
     assert any("under 4s" in flag for flag in bare["flags"]), "without the pad the same words are under 4 s"
 
 
+def test_build_tail_pad_ms_moves_the_cut_end(episode_id, audio_ops, tmp_path, capsys):
+    script = write_script(tmp_path / "script.json", {
+        "segments": [{"type": "clip", "start": "1:56", "end": "1:59.9", "speaker": "Ada"}],
+    })
+    for pad in ("0", "500"):
+        result, code = run(capsys, "build", episode_id, script, "--tail-pad-ms", pad, "--out", tmp_path / f"{pad}.mp3")
+        assert code == 0, result
+    assert audio_ops["cut"] == [(115.95, 119.9), (115.95, 120.4)]
+    result, code = run(capsys, "build", episode_id, script, "--tail-pad-ms", "-1")
+    assert code == 1 and result["kind"] == "error" and "tail-pad-ms" in result["message"]
+
+
 def test_build_output_field_is_used_when_out_is_omitted(episode_id, audio_ops, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     script = write_script(tmp_path / "script.json", {

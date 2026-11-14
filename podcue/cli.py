@@ -136,6 +136,8 @@ def build_parser() -> Parser:
     build.add_argument("script", help="script.json: {voice?, output?, segments:[...]}")
     build.add_argument("--out", metavar="FILE",
                        help="output audio (default: the script's output, else produced_summary.mp3)")
+    build.add_argument("--tail-pad-ms", type=int, default=200, metavar="MS",
+                       help="audio kept after a clip's last word before the cut looks for quiet (default 200)")
     return parser
 
 
@@ -353,8 +355,10 @@ def run_fetch(args, _root):
 def run_build(args, root):
     from .recap import build
 
+    if args.tail_pad_ms < 0:
+        raise Failure("tail-pad-ms must be an integer 0 or more", reason="tail-pad-ms")
     episode = _episode(root, args.episodeId)
-    return build(episode, _ready(episode), Path(args.script), getattr(args, "out", None))
+    return build(episode, _ready(episode), Path(args.script), getattr(args, "out", None), args.tail_pad_ms / 1000)
 
 
 def run_fetch_weights(_args, _root):
