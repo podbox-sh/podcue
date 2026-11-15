@@ -66,7 +66,7 @@ def test_resolve_language_accepts_any_code_and_rejects_a_disagreement():
 
 
 def test_words_outside_detected_speech_are_left_out():
-    piece = Slice(0, 0, 2_000, 0, 2_000, 0)
+    piece = Slice(0, 0, 2_000, 0)
     results, dropped = assign_words([piece], [(100, 400, "Hello"), (5_000, 5_500, "later")])
     assert dropped == 1
     assert results == [(piece, [Word("Hello", 0.1, 0.4)])]
@@ -139,6 +139,39 @@ def test_transcript_path_does_not_open_asr(monkeypatch):
         [(0, 400, "Hello"), (400, 900, "there.")],
     )
     assert [cue.text for cue in cues] == ["Hello there."]
+
+
+def test_a_pause_splits_built_in_cues_but_not_transcript_cues(monkeypatch):
+    import numpy as np
+
+    from podcue import pipeline, weights
+    from podcue.diarize import Tracks, Turn
+
+    samples = np.zeros(32_000, dtype=np.float32)
+    noise = np.random.default_rng(0).standard_normal(16_000).astype(np.float32) * 0.1
+    samples[:8_000] = noise[:8_000]
+    samples[12_800:20_800] = noise[8_000:]
+
+    class Fake:
+        def __init__(self, *_args):
+            return None
+
+        def diarize(self, _samples):
+            return Tracks([Turn(0, 2_000, 0)], [[1.0, 0.0]])
+
+    class Whisper:
+        def transcribe(self, _samples):
+            return [Word("so", 0.0, 0.5), Word("anyway.", 0.8, 1.3)]
+
+    monkeypatch.setattr(pipeline, "open_transcriber", lambda _language: Whisper())
+    monkeypatch.setattr(pipeline, "Diarizer", Fake)
+    monkeypatch.setattr(weights, "ensure", lambda _pin: _pin.file)
+    built_in, _ = pipeline.transcribe(samples, "en", lambda *_args: None)
+    agent, _ = pipeline.transcribe(
+        samples, "en", lambda *_args: None, [(0, 500, "so"), (800, 1_300, "anyway.")],
+    )
+    assert [cue.text for cue in built_in] == ["so", "anyway."], "built-in cues close at the 300 ms pause"
+    assert [cue.text for cue in agent] == ["so anyway."], "transcript cues keep the agent's sentence"
 
 
 def test_builtin_unknown_language_is_still_rejected(engine, root, tmp_path, capsys):

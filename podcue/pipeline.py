@@ -18,6 +18,7 @@ from pathlib import Path
 from . import audio, weights
 from .cues import Word, build_cues, cue_rows, group_table, render_vtt
 from .diarize import Diarizer, Tracks
+from .pauses import Quiet
 from .regions import Slice, plan_regions
 from .store import Episode, lock_pid, read_json, release, retire_labels, try_lock, write_json, write_text
 from .transcribe import LANGUAGES, asr_record, open_transcriber, quiet_hub, transcribe_slice
@@ -64,8 +65,6 @@ def _slice_matches(saved: dict, piece: Slice) -> bool:
     return (
         saved.get("startMs") == piece.start_ms
         and saved.get("endMs") == piece.end_ms
-        and saved.get("keepStartMs") == piece.keep_start_ms
-        and saved.get("keepEndMs") == piece.keep_end_ms
         and saved.get("region") == piece.region
     )
 
@@ -134,8 +133,6 @@ def run_slices(
             "index": piece.index,
             "startMs": piece.start_ms,
             "endMs": piece.end_ms,
-            "keepStartMs": piece.keep_start_ms,
-            "keepEndMs": piece.keep_end_ms,
             "region": piece.region,
             "state": outcome.state,
             "words": [_word_row(word) for word in words],
@@ -169,7 +166,8 @@ def transcribe(
     log(f"diarizing {audio.duration_ms(samples) / 1000:.1f} s of audio")
     tracks = Diarizer(ecapa, segmentation).diarize(samples)
 
-    plan = plan_regions(tracks.turns)
+    quiet = Quiet(samples)
+    plan = plan_regions(tracks.turns, quiet)
     if transcript_words is not None:
         results, dropped = assign_words(plan, transcript_words)
         if dropped:
@@ -180,7 +178,7 @@ def transcribe(
             samples, plan, transcriber, checkpoint, report,
             audio_id=audio_id, language=language,
         )
-    return build_cues(results, language), tracks
+    return build_cues(results, language, quiet if transcript_words is None else None), tracks
 
 
 def recorded_source(source: str) -> str:

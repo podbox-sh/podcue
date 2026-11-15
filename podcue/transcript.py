@@ -173,7 +173,7 @@ def load_transcript(path: Path) -> Transcript:
 
 
 def assign_words(slices: list[Slice], words: list[tuple[int, int, str]]) -> tuple[list[tuple[Slice, list[Word]]], int]:
-    """Words whose start falls in a slice's keep window, as seconds from that slice's start.
+    """Words whose start falls in a slice, as seconds from that slice's start.
 
     Returns the slice pairs and how many words were left out. A word that starts outside every
     detected speech region is left out, the same as speech the diarizer misses.
@@ -183,7 +183,7 @@ def assign_words(slices: list[Slice], words: list[tuple[int, int, str]]) -> tupl
     for piece in slices:
         chunk: list[Word] = []
         for start_ms, end_ms, text in words:
-            if piece.keep_start_ms <= start_ms < piece.keep_end_ms:
+            if piece.start_ms <= start_ms < piece.end_ms:
                 start_s = (start_ms - piece.start_ms) / 1000.0
                 end_s = (end_ms - piece.start_ms) / 1000.0
                 if end_s <= start_s:

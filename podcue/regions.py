@@ -1,19 +1,21 @@
 """Plan transcription slices from speaker turns.
 
-Same-speaker turns a short gap apart are joined, turns too short to transcribe alone are
-absorbed into a neighbor, and a region longer than one slice is cut on a fixed grid with
-a one-second overlap. Only words that start inside a slice's keep window become cues.
+Same-speaker turns a short gap apart are joined, and turns too short to transcribe alone are
+absorbed into a neighbor. A region longer than one slice is cut at the quietest 100 ms in the
+last 6 seconds of each slice, so the edge falls in a pause instead of inside a word. The cut stays
+at least 2 seconds before the region's end, so the last slice is never a sliver. Slices do
+not overlap, and a word belongs to the slice where it starts.
 """
 
 from __future__ import annotations
 
+import sys
 from typing import NamedTuple
 
 from .diarize import Turn
+from .pauses import CUT_SEARCH_MS, MIN_LAST_SLICE_MS, Quiet
 
 SLICE_MS = 28_000  # under the transcriber's 30 second window
-OVERLAP_MS = 1_000  # a word cut at a slice edge is heard whole in the next slice
-STEP_MS = SLICE_MS - OVERLAP_MS
 JOIN_GAP_MS = 500
 SHORT_TURN_MS = 500
 
@@ -22,15 +24,14 @@ class Slice(NamedTuple):
     index: int
     start_ms: int
     end_ms: int
-    keep_start_ms: int
-    keep_end_ms: int
     region: int
 
 
-def plan_regions(turns: list[Turn]) -> list[Slice]:
+def plan_regions(turns: list[Turn], quiet: Quiet | None = None) -> list[Slice]:
+    """Slices of each speaker region. Without `quiet`, a long region is cut every SLICE_MS."""
     slices: list[Slice] = []
     for region, (start, end) in enumerate(_absorb_short(_join_same_speaker(turns))):
-        _append_span(slices, start, end, region)
+        _append_span(slices, start, end, region, quiet)
     return slices
 
 
@@ -64,15 +65,16 @@ def _absorb_short(regions: list[list[int]]) -> list[list[int]]:
     return kept
 
 
-def _append_span(slices: list[Slice], start: int, end: int, region: int) -> None:
-    if end - start <= SLICE_MS:
-        slices.append(Slice(len(slices), start, end, start, end, region))
-        return
+def _append_span(slices: list[Slice], start: int, end: int, region: int, quiet: Quiet | None) -> None:
     cursor = start
-    while cursor < end:
-        stop = min(cursor + SLICE_MS, end)
-        keep_end = end if stop == end else cursor + STEP_MS
-        slices.append(Slice(len(slices), cursor, stop, cursor, keep_end, region))
-        if stop == end:
-            break
-        cursor += STEP_MS
+    while end - cursor > SLICE_MS:
+        stop = cursor + SLICE_MS
+        cut = stop
+        if quiet is not None:
+            cut = quiet.quietest_ms(stop - CUT_SEARCH_MS, min(stop, end - MIN_LAST_SLICE_MS))
+            if not quiet.is_quiet_ms(cut):
+                print(f"podcue: no pause near {cut / 1000:.2f} s, so the slice cut there may split a word",
+                      file=sys.stderr, flush=True)
+        slices.append(Slice(len(slices), cursor, cut, region))
+        cursor = cut
+    slices.append(Slice(len(slices), cursor, end, region))

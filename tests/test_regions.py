@@ -1,5 +1,8 @@
+import numpy as np
+
 from podcue.diarize import Turn
-from podcue.regions import SLICE_MS, STEP_MS, Slice, plan_regions
+from podcue.pauses import Quiet
+from podcue.regions import SLICE_MS, Slice, plan_regions
 
 
 def spans(slices):
@@ -38,19 +41,51 @@ def test_isolated_short_turn_stays():
     assert spans(plan_regions(turns)) == [(0, 300)]
 
 
-def test_long_region_is_cut_with_overlap_and_keep_windows():
-    turns = [Turn(1_000, 61_000, 0)]
-    plan = plan_regions(turns)
+def test_long_region_without_quiet_is_cut_every_slice_without_overlap():
+    plan = plan_regions([Turn(1_000, 61_000, 0)])
     assert plan == [
-        Slice(0, 1_000, 1_000 + SLICE_MS, 1_000, 1_000 + STEP_MS, 0),
-        Slice(1, 1_000 + STEP_MS, 1_000 + STEP_MS + SLICE_MS, 1_000 + STEP_MS, 1_000 + 2 * STEP_MS, 0),
-        Slice(2, 1_000 + 2 * STEP_MS, 61_000, 1_000 + 2 * STEP_MS, 61_000, 0),
+        Slice(0, 1_000, 1_000 + SLICE_MS, 0),
+        Slice(1, 1_000 + SLICE_MS, 1_000 + 2 * SLICE_MS, 0),
+        Slice(2, 1_000 + 2 * SLICE_MS, 61_000, 0),
     ]
+
+
+def test_long_region_is_cut_inside_its_pause():
+    samples = (np.random.default_rng(0).standard_normal(60 * 16_000) * 0.1).astype(np.float32)
+    samples[25_000 * 16 : 25_400 * 16] = 0.0
+    plan = plan_regions([Turn(0, 60_000, 0)], Quiet(samples))
+    assert 25_000 < plan[0].end_ms < 25_400, f"first cut {plan[0].end_ms} is outside the 25.0-25.4 s pause"
+    assert plan[0].start_ms == 0 and plan[-1].end_ms == 60_000, "slices cover the region"
+    assert all(a.end_ms == b.start_ms for a, b in zip(plan, plan[1:])), "slices are contiguous with no overlap"
+    assert all(s.end_ms - s.start_ms <= SLICE_MS for s in plan), "no slice is longer than SLICE_MS"
+    assert [s.index for s in plan] == list(range(len(plan))) and {s.region for s in plan} == {0}
+
+
+def test_the_last_slice_is_never_a_sliver():
+    samples = (np.random.default_rng(0).standard_normal(28_100 * 16) * 0.1).astype(np.float32)
+    samples[27_850 * 16 : 27_950 * 16] = 0.0
+    plan = plan_regions([Turn(0, 28_100, 0)], Quiet(samples))
+    assert plan[-1].end_ms - plan[-1].start_ms >= 2_000, f"last slice {plan[-1]} is under 2 s"
+    assert all(s.end_ms - s.start_ms <= SLICE_MS for s in plan), "no slice is longer than SLICE_MS"
+    assert plan[0].start_ms == 0 and plan[-1].end_ms == 28_100, "slices cover the region"
+
+
+def test_a_cut_with_no_pause_stays_in_its_window_and_is_logged(capsys):
+    noise = (np.random.default_rng(0).standard_normal(40_000 * 16) * 0.1).astype(np.float32)
+    plan = plan_regions([Turn(0, 40_000, 0)], Quiet(noise))
+    cut = plan[0].end_ms
+    assert SLICE_MS - 6_000 <= cut <= SLICE_MS, f"cut {cut} is outside the 22-28 s search window"
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 1 and lines[0].startswith("podcue: ") and f"{cut / 1000:.2f} s" in lines[0], lines
+    paused = noise.copy()
+    paused[25_000 * 16 : 25_400 * 16] = 0.0
+    plan_regions([Turn(0, 40_000, 0)], Quiet(paused))
+    assert capsys.readouterr().err == "", "a cut inside a pause logs nothing"
 
 
 def test_region_of_exactly_one_slice_is_not_cut():
     plan = plan_regions([Turn(0, SLICE_MS, 0)])
-    assert plan == [Slice(0, 0, SLICE_MS, 0, SLICE_MS, 0)]
+    assert plan == [Slice(0, 0, SLICE_MS, 0)]
 
 
 def test_no_turns_no_slices():
