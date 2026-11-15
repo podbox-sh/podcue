@@ -4,8 +4,9 @@
 `[h:]mm:ss[.s]`. Each edge picks the nearest word time spread across the cue that contains it, the
 same way a clip of a few cues covers consecutive lines of at most 12 s. The start then backs off 50 ms,
 never into the previous word. The end pads past the last word, cuts at the first quiet window in the
-audio, and stops 30 ms short of the next word. Kokoro, soundfile, and yt-dlp stay in the `recap` extra
-and are imported only when a narration or a page download needs them.
+audio, and stops 30 ms short of the next word. It never cuts before the last word ends. When the next
+word is closer than the pad, the cut looks for quiet within 150 ms of that boundary. Kokoro, soundfile,
+and yt-dlp stay in the `recap` extra and are imported only when a narration or a page download needs them.
 """
 
 from __future__ import annotations
@@ -58,6 +59,8 @@ LEAD_PAD_S = 0.05
 TAIL_PAD_S = 0.20
 QUIET_SEARCH_S = 0.40
 NEXT_WORD_GUARD_S = 0.03
+# A transcriber's word edge can be this far off, so a tight end looks for quiet this far past it.
+BOUNDARY_REACH_S = 0.15
 QUIET_WINDOW_S = 0.02
 QUIET_HOP_S = 0.005
 QUIET_DB = -25.0
@@ -359,7 +362,9 @@ def clip_edges(words: list[tuple[float, float, str]], first: int, last: int, tai
                span: Span | None) -> tuple[float, float]:
     """Clip start and end in seconds for the words `first` through `last`.
 
-    `span` is the source audio around those words. Without it the end is the padded word end.
+    `span` is the source audio around those words. The end never cuts before the last word ends,
+    unless the span's audio ends first. When the next word is closer than the pad, the cut looks
+    for quiet from the last word's end to `BOUNDARY_REACH_S` past the next word's start.
     """
     head, tail = words[first], words[last]
     start = head[0] - LEAD_PAD_S
@@ -367,15 +372,22 @@ def clip_edges(words: list[tuple[float, float, str]], first: int, last: int, tai
         start = max(start, words[first - 1][1])
     start = max(start, 0.0)
     padded = tail[1] + tail_pad
-    limit = words[last + 1][0] - NEXT_WORD_GUARD_S if last + 1 < len(words) else math.inf
-    cut = padded
+    following = words[last + 1][0] if last + 1 < len(words) else math.inf
+    limit = following - NEXT_WORD_GUARD_S
+    level = 0.0
     if span is not None:
         limit = min(limit, span.end)
         level = _rms(span.between(head[0], tail[1]))
+    if padded <= limit:
         quiet = first_quiet(span, level, padded, padded + QUIET_SEARCH_S) if level > 0 else None
-        if quiet is not None:
-            cut = quiet
-    return round(start, 3), round(min(cut, limit), 3)
+        return round(start, 3), round(min(padded if quiet is None else quiet, limit), 3)
+    quiet = None
+    if level > 0:
+        quiet = first_quiet(span, level, tail[1], min(following + BOUNDARY_REACH_S, span.end))
+    end = max(limit, tail[1]) if quiet is None else quiet
+    if span is not None:
+        end = min(end, span.end)
+    return round(start, 3), round(end, 3)
 
 
 FLAGGED_SPEAKERS = ("uncertain", "mixed", "undetermined")
@@ -769,7 +781,8 @@ def render_report(episode_id: str, source: Path, dest: Path, duration_s: float, 
         "",
         "Clip edges are the cue word times the requested range snapped to. A clip starts 50 ms before its first word "
         "and never inside the previous word. Its end pads past the last word, cuts where the audio goes quiet, "
-        "and stops 30 ms before the next word. "
+        "and stops 30 ms before the next word. It never cuts before the last word ends. When the next word is "
+        "closer than the pad, the cut looks for quiet within 150 ms of that boundary. "
         "A clip under 4 seconds or over 45 seconds is flagged, as is an uncertain, mixed, or undetermined cue.",
         "",
         "| # | type | speaker | voice | range | length | LUFS in→out | flags |",
