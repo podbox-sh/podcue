@@ -52,6 +52,12 @@ class Quiet:
         longest = int((edges[1::2] - edges[::2]).max())
         return (longest - 1) * HOP_MS + WINDOW_MS
 
+    def is_quiet_ms(self, ms: int) -> bool:
+        """Whether any quiet 20 ms window lies inside the 100 ms window centred on `ms`."""
+        first = max(0, -(-(ms - QUIETEST_MS // 2) // HOP_MS))
+        last = (ms + QUIETEST_MS // 2 - WINDOW_MS) // HOP_MS
+        return bool(self._quiet[first : last + 1].any())
+
     def quietest_ms(self, lo_ms: int, hi_ms: int) -> int:
         """The centre of the quietest 100 ms window inside [lo_ms, hi_ms], or `hi_ms` when none fits."""
         width = QUIETEST_MS // HOP_MS

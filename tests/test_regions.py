@@ -70,6 +70,19 @@ def test_the_last_slice_is_never_a_sliver():
     assert plan[0].start_ms == 0 and plan[-1].end_ms == 28_100, "slices cover the region"
 
 
+def test_a_cut_with_no_pause_stays_in_its_window_and_is_logged(capsys):
+    noise = (np.random.default_rng(0).standard_normal(40_000 * 16) * 0.1).astype(np.float32)
+    plan = plan_regions([Turn(0, 40_000, 0)], Quiet(noise))
+    cut = plan[0].end_ms
+    assert SLICE_MS - 6_000 <= cut <= SLICE_MS, f"cut {cut} is outside the 22-28 s search window"
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 1 and lines[0].startswith("podcue: ") and f"{cut / 1000:.2f} s" in lines[0], lines
+    paused = noise.copy()
+    paused[25_000 * 16 : 25_400 * 16] = 0.0
+    plan_regions([Turn(0, 40_000, 0)], Quiet(paused))
+    assert capsys.readouterr().err == "", "a cut inside a pause logs nothing"
+
+
 def test_region_of_exactly_one_slice_is_not_cut():
     plan = plan_regions([Turn(0, SLICE_MS, 0)])
     assert plan == [Slice(0, 0, SLICE_MS, 0)]

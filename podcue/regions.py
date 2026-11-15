@@ -9,6 +9,7 @@ not overlap, and a word belongs to the slice where it starts.
 
 from __future__ import annotations
 
+import sys
 from typing import NamedTuple
 
 from .diarize import Turn
@@ -68,7 +69,12 @@ def _append_span(slices: list[Slice], start: int, end: int, region: int, quiet: 
     cursor = start
     while end - cursor > SLICE_MS:
         stop = cursor + SLICE_MS
-        cut = stop if quiet is None else quiet.quietest_ms(stop - CUT_SEARCH_MS, min(stop, end - MIN_LAST_SLICE_MS))
+        cut = stop
+        if quiet is not None:
+            cut = quiet.quietest_ms(stop - CUT_SEARCH_MS, min(stop, end - MIN_LAST_SLICE_MS))
+            if not quiet.is_quiet_ms(cut):
+                print(f"podcue: no pause near {cut / 1000:.2f} s, so the slice cut there may split a word",
+                      file=sys.stderr, flush=True)
         slices.append(Slice(len(slices), cursor, cut, region))
         cursor = cut
     slices.append(Slice(len(slices), cursor, end, region))
