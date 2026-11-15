@@ -2,7 +2,8 @@
 
 Same-speaker turns a short gap apart are joined, and turns too short to transcribe alone are
 absorbed into a neighbor. A region longer than one slice is cut at the quietest 100 ms in the
-last 6 seconds of each slice, so the edge falls in a pause instead of inside a word. Slices do
+last 6 seconds of each slice, so the edge falls in a pause instead of inside a word. The cut stays
+at least 2 seconds before the region's end, so the last slice is never a sliver. Slices do
 not overlap, and a word belongs to the slice where it starts.
 """
 
@@ -11,7 +12,7 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from .diarize import Turn
-from .pauses import CUT_SEARCH_MS, Quiet
+from .pauses import CUT_SEARCH_MS, MIN_LAST_SLICE_MS, Quiet
 
 SLICE_MS = 28_000  # under the transcriber's 30 second window
 JOIN_GAP_MS = 500
@@ -67,7 +68,7 @@ def _append_span(slices: list[Slice], start: int, end: int, region: int, quiet: 
     cursor = start
     while end - cursor > SLICE_MS:
         stop = cursor + SLICE_MS
-        cut = stop if quiet is None else quiet.quietest_ms(stop - CUT_SEARCH_MS, stop)
+        cut = stop if quiet is None else quiet.quietest_ms(stop - CUT_SEARCH_MS, min(stop, end - MIN_LAST_SLICE_MS))
         slices.append(Slice(len(slices), cursor, cut, region))
         cursor = cut
     slices.append(Slice(len(slices), cursor, end, region))

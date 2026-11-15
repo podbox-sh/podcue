@@ -18,6 +18,7 @@ REACH_MS = 150  # a transcriber word edge can be this far off the pause it borde
 PAUSE_CLOSE_MS = 250  # the low point between hesitations and phrase breaks on All-In and Huberman Lab
 QUIETEST_MS = 100
 CUT_SEARCH_MS = 6_000
+MIN_LAST_SLICE_MS = 2_000  # the transcriber drops or invents words on a sliver of audio
 _HOP = RATE * HOP_MS // 1000
 
 

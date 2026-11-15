@@ -61,6 +61,15 @@ def test_long_region_is_cut_inside_its_pause():
     assert [s.index for s in plan] == list(range(len(plan))) and {s.region for s in plan} == {0}
 
 
+def test_the_last_slice_is_never_a_sliver():
+    samples = (np.random.default_rng(0).standard_normal(28_100 * 16) * 0.1).astype(np.float32)
+    samples[27_850 * 16 : 27_950 * 16] = 0.0
+    plan = plan_regions([Turn(0, 28_100, 0)], Quiet(samples))
+    assert plan[-1].end_ms - plan[-1].start_ms >= 2_000, f"last slice {plan[-1]} is under 2 s"
+    assert all(s.end_ms - s.start_ms <= SLICE_MS for s in plan), "no slice is longer than SLICE_MS"
+    assert plan[0].start_ms == 0 and plan[-1].end_ms == 28_100, "slices cover the region"
+
+
 def test_region_of_exactly_one_slice_is_not_cut():
     plan = plan_regions([Turn(0, SLICE_MS, 0)])
     assert plan == [Slice(0, 0, SLICE_MS, 0)]
