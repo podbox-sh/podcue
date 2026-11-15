@@ -178,7 +178,7 @@ def transcribe(
             samples, plan, transcriber, checkpoint, report,
             audio_id=audio_id, language=language,
         )
-    return build_cues(results, language), tracks
+    return build_cues(results, language, quiet if transcript_words is None else None), tracks
 
 
 def recorded_source(source: str) -> str:

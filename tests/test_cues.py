@@ -1,12 +1,27 @@
+import numpy as np
 import pytest
 
 from podcue.cues import Cue, Word, build_cues, cue_rows, group_table, join_cue_text, render_vtt, shift, stamp
 from podcue.diarize import Tracks, Turn
+from podcue.pauses import Quiet
 from podcue.regions import Slice
 
 
 def whole(start, end, region=0, index=0):
     return Slice(index, start, end, region)
+
+
+def speech(total_ms, spans):
+    """Noise at one steady level inside each (startMs, endMs) span and digital silence elsewhere."""
+    samples = np.zeros(total_ms * 16, dtype=np.float32)
+    rng = np.random.default_rng(0)
+    for start, end in spans:
+        samples[start * 16 : end * 16] = rng.standard_normal((end - start) * 16) * 0.1
+    return samples
+
+
+def timed(spans):
+    return [Word(f"w{index}", start / 1000, end / 1000) for index, (start, end) in enumerate(spans)]
 
 
 def test_shift_rounds_half_up_to_the_millisecond():
@@ -49,6 +64,28 @@ def test_a_cue_closes_after_twelve_seconds_without_punctuation():
     words = [Word(f"w{i}", float(i), i + 0.5) for i in range(14)]
     cues = build_cues([(whole(0, 20_000), words)])
     assert [(c.start_ms, c.end_ms) for c in cues] == [(0, 11_500), (12_000, 13_500)]
+
+
+def test_a_pause_of_300_ms_inside_a_sentence_closes_a_built_in_cue():
+    spans = [(0, 500), (800, 1_300)]
+    cues = build_cues([(whole(0, 2_000), timed(spans))], quiet=Quiet(speech(2_000, spans)))
+    assert cues == [Cue("c0001", 0, 500, "w0"), Cue("c0002", 800, 1_300, "w1")]
+
+
+def test_a_pause_of_100_ms_keeps_one_cue():
+    spans = [(0, 500), (600, 1_100)]
+    cues = build_cues([(whole(0, 2_000), timed(spans))], quiet=Quiet(speech(2_000, spans)))
+    assert cues == [Cue("c0001", 0, 1_100, "w0 w1")]
+
+
+def test_the_twelve_second_limit_closes_after_the_longest_pause():
+    before = [(400 * i, 400 * i + 400) for i in range(13)]
+    after = [(5_400 + 400 * i, 5_800 + 400 * i) for i in range(22)]
+    spans = before + after
+    cues = build_cues([(whole(0, 15_000), timed(spans))], quiet=Quiet(speech(15_000, spans)))
+    assert [(c.start_ms, c.end_ms) for c in cues] == [(0, 5_200), (5_400, 14_200)], (
+        "the first cue ends at the word before the 200 ms pause, not at the word that crossed 12 s"
+    )
 
 
 def test_a_cue_closes_where_a_speaker_region_ends():

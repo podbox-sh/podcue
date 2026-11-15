@@ -1,7 +1,9 @@
 """Build cues from timed words, attach diarization speaker groups, and render WebVTT.
 
 A cue time is only ever a slice start plus a transcriber word time, so a rerun on the same
-words gives the same cues.
+words gives the same cues. Built-in cues also close at pauses in the audio, so a clip cut from
+whole cues ends in a pause. Cues from an agent's transcript close only on punctuation, speaker
+regions, and the 12 s limit.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ import re
 from typing import NamedTuple
 
 from .diarize import Tracks, Turn
+from .pauses import PAUSE_CLOSE_MS, Quiet
 from .regions import Slice
 
 UNGROUPED = "ungrouped"
@@ -83,26 +86,20 @@ def join_cue_text(tokens: list[str]) -> str:
     return text
 
 
-def build_cues(results: list[tuple[Slice, list[Word]]], language: str = "en") -> list[Cue]:
+def build_cues(
+    results: list[tuple[Slice, list[Word]]], language: str = "en", quiet: Quiet | None = None,
+) -> list[Cue]:
     """Keep each word that starts inside its slice, then group words into cues.
 
-    A cue closes on sentence punctuation for `language`, after MAX_CUE_MS, and where one speaker
-    region ends.
+    A cue closes on sentence punctuation for `language` and where one speaker region ends. With
+    `quiet`, it also closes after a word followed by a pause of PAUSE_CLOSE_MS or more. A word that
+    starts MAX_CUE_MS after the cue start closes the cue. With `quiet` the cue then ends after its
+    word with the longest pause, and the words after that one start the next cue.
     """
     closes = sentence_end(language)
-    cues: list[Cue] = []
-    bucket: list[tuple[int, int, str]] = []
-    bucket_region = -1
-
-    def close() -> None:
-        nonlocal bucket
-        if bucket:
-            text = join_cue_text([word for _, _, word in bucket])
-            cues.append(Cue(cue_id(len(cues)), bucket[0][0], bucket[-1][1], text))
-            bucket = []
-
-    for piece, words in results:
-        for word in words:
+    words: list[tuple[int, int, str, int]] = []
+    for piece, raw in results:
+        for word in raw:
             text = word.text.strip()
             if not text:
                 continue
@@ -110,15 +107,35 @@ def build_cues(results: list[tuple[Slice, list[Word]]], language: str = "en") ->
             end = shift(piece.start_ms, word.end)
             if end <= start:
                 end = start + 1
-            if not piece.start_ms <= start < piece.end_ms:
-                continue
-            if bucket and (piece.region != bucket_region or start - bucket[0][0] >= MAX_CUE_MS):
-                close()
-            bucket_region = piece.region
-            bucket.append((start, end, text))
-            if closes.search(text):
-                close()
-    close()
+            if piece.start_ms <= start < piece.end_ms:
+                words.append((start, end, text, piece.region))
+    pauses = [0] * len(words)
+    if quiet is not None:
+        for index in range(len(words) - 1):
+            pauses[index] = quiet.pause_ms(words[index][1], words[index + 1][0])
+
+    cues: list[Cue] = []
+
+    def emit(indices: list[int]) -> None:
+        text = join_cue_text([words[index][2] for index in indices])
+        cues.append(Cue(cue_id(len(cues)), words[indices[0]][0], words[indices[-1]][1], text))
+
+    bucket: list[int] = []
+    for index, (start, _end, text, region) in enumerate(words):
+        if bucket and words[bucket[-1]][3] != region:
+            emit(bucket)
+            bucket = []
+        while bucket and start - words[bucket[0]][0] >= MAX_CUE_MS:
+            # Ties go to the later word, so with no pause the cue closes where it would without `quiet`.
+            cut = max(range(len(bucket)), key=lambda at: (pauses[bucket[at]], at)) + 1
+            emit(bucket[:cut])
+            bucket = bucket[cut:]
+        bucket.append(index)
+        if closes.search(text) or pauses[index] >= PAUSE_CLOSE_MS:
+            emit(bucket)
+            bucket = []
+    if bucket:
+        emit(bucket)
     return cues
 
 

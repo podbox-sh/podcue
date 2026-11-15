@@ -13,6 +13,9 @@ Not tagged and not published. The package metadata is `0.2.8`.
 - The pad is no longer clamped to the clip's own cue end. A cue ends at Whisper's last-word end, which lands before the sound stops, so that clamp gave every clip ending on a cue no tail at all. The clamp to an adjacent cue of another speaker is gone too. That cue's first word is the next word, so the 30 ms guard keeps the clip out of it.
 - A speech region longer than 28 s is cut at the quietest 100 ms in the last 6 s of each 28 s slice. It was cut on a fixed 28 s grid with a 1 s overlap, and a cut inside a word could give that word twice at the wrong time. On the Gettysburg fixture forced into one region, the grid cut gave "war we we have" and the quiet cut landed in silence with no duplicate.
 - Slices no longer overlap, and a word belongs to the slice where it starts. `slices.json` rows have no `keepStartMs` or `keepEndMs`, so a checkpoint from 0.2.7 is not resumed and its slices run again.
+- Built-in cues also close after a word followed by a pause of 250 ms or more. A clip is cut from whole cues, so its edges now land on pauses. On 15 minutes each of All-In and Huberman Lab, 250 ms is the low point between hesitations and phrase breaks.
+- A built-in cue that reaches 12 s closes after its word with the longest pause, and the words after it start the next cue. It used to close at the word that crossed 12 s, which split the Gettysburg fixture at "the proposition that | all men are created equal."
+- Cues from `--transcript` close as before, on punctuation, speaker regions, and the 12 s limit. The agent's cue boundaries do not move.
 
 ## 0.2.7
 
