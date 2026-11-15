@@ -47,7 +47,7 @@ def _episode(root: Path, source: Path) -> None:
     (folder / "episode.json").write_text(json.dumps({
         "episodeId": EPISODE_ID,
         "source": str(source.resolve()),
-        "durationMs": 5_000,
+        "durationMs": 6_000,
         "language": "en",
         "createdAt": "2026-11-12T00:00:00Z",
         "asr": {"engine": "external", "model": None, "revision": None},
@@ -55,7 +55,7 @@ def _episode(root: Path, source: Path) -> None:
     (folder / "cues.json").write_text(json.dumps([{
         "id": "c0001",
         "startMs": 0,
-        "endMs": 5_000,
+        "endMs": 4_000,
         "text": "hello from the clip",
         "groupId": "gc0001",
         "speaker": "gc0001",
@@ -78,13 +78,13 @@ def test_build_narrates_with_kokoro_and_writes_a_playable_file(tmp_path, monkeyp
     root = tmp_path / "home"
     monkeypatch.setenv("PODCUE_HOME", str(root))
     source = tmp_path / "source.wav"
-    _tone(source)
+    _tone(source, 6.0)
     _episode(root, source)
     script = tmp_path / "script.json"
     script.write_text(json.dumps({
         "segments": [
             {"type": "narration", "text": "In 1996 the city added 400,000 homes."},
-            {"type": "clip", "start": "0", "end": "5", "speaker": "the host"},
+            {"type": "clip", "start": "0", "end": "4", "speaker": "the host"},
         ],
     }), encoding="utf-8")
     output = tmp_path / "recap.mp3"
@@ -95,6 +95,8 @@ def test_build_narrates_with_kokoro_and_writes_a_playable_file(tmp_path, monkeyp
     assert result["kind"] == "built"
     assert result["segments"][0]["type"] == "narration"
     assert result["segments"][1]["type"] == "clip"
+    clip_end = result["segments"][1]["end"]
+    assert clip_end >= 4.0 + 0.2, f"the clip ends at {clip_end}, short of the 4 s cue end plus the 200 ms pad"
     assert output.is_file() and output.stat().st_size > 0
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(output)],

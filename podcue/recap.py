@@ -1,9 +1,12 @@
 """Build a recap: snap clips to cue times, narrate with Kokoro, stitch, and check speakers.
 
 `script.json` is the plan `podcue build` reads. A clip's `start` and `end` are seconds or
-`[h:]mm:ss[.s]`. Each edge snaps to a word time spread across the cue that contains it, the same
-way a clip of a few cues covers consecutive lines of at most 12 s. Kokoro, soundfile, and yt-dlp stay
-in the `recap` extra and are imported only when a narration or a page download needs them.
+`[h:]mm:ss[.s]`. Each edge picks the nearest word time spread across the cue that contains it, the
+same way a clip of a few cues covers consecutive lines of at most 12 s. The start then backs off 50 ms,
+never into the previous word. The end pads past the last word, cuts at the first quiet window in the
+audio, and stops 30 ms short of the next word. It never cuts before the last word ends. When the next
+word is closer than the pad, the cut looks for quiet within 150 ms of that boundary. Kokoro, soundfile,
+and yt-dlp stay in the `recap` extra and are imported only when a narration or a page download needs them.
 """
 
 from __future__ import annotations
@@ -21,9 +24,12 @@ import warnings
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
+
+import numpy as np
 
 from . import __version__
-from .audio import is_url
+from .audio import RATE, is_url
 from .numbers import say_numbers
 from .store import Episode, load_labels, write_text
 from .transcribe import quiet_hub
@@ -48,6 +54,18 @@ OTHER_MIN_S = 1.0
 OTHER_MIN_FRAC = 0.08
 CLIP_WARN_UNDER_S = 4.0
 CLIP_WARN_OVER_S = 45.0
+# Clip edges. Whisper's word end lands before the sound stops, so the end pads, then snaps to quiet.
+LEAD_PAD_S = 0.05
+TAIL_PAD_S = 0.20
+QUIET_SEARCH_S = 0.40
+NEXT_WORD_GUARD_S = 0.03
+# A transcriber's word edge can be this far off, so a tight end looks for quiet this far past it.
+BOUNDARY_REACH_S = 0.15
+QUIET_WINDOW_S = 0.02
+QUIET_HOP_S = 0.005
+QUIET_DB = -25.0
+FADE_IN_S = 0.01
+FADE_OUT_S = 0.04
 KOKORO_REPO = "hexgrad/Kokoro-82M"
 # Not on PyPI. The wheel is the GitHub release; PyPI rejects a direct-URL dependency.
 SPACY_MODEL = Pin(
@@ -271,7 +289,7 @@ def load_script(path: Path) -> Script:
     return parse_script(value)
 
 
-def words_from_cues(rows: list[dict]) -> list[tuple]:
+def words_from_cues(rows: list[dict]) -> list[tuple[float, float, str]]:
     """Spread each cue's words across its start and end.
 
     Cues carry no per-word timestamps. The spacing is by character length, so a clip edge still
@@ -288,64 +306,88 @@ def words_from_cues(rows: list[dict]) -> list[tuple]:
         cursor = start
         for token in tokens:
             span = (end - start) * (len(token) + 1) / weight
-            words.append((
-                round(cursor, 2),
-                round(min(end, cursor + span), 2),
-                f" {token}",
-                start,
-                end,
-                row.get("speaker") or row.get("groupId") or "",
-            ))
+            words.append((round(cursor, 2), round(min(end, cursor + span), 2), f" {token}"))
             cursor += span
     return words
 
 
-def snap(words: list[tuple[float, float, str]], start: float, end: float) -> tuple[float, float, int, int]:
-    """Snap to the nearest word edges, then pad halfway into the neighbouring silence.
+class Span(NamedTuple):
+    """Mono float32 samples at 16 kHz. Sample 0 is at `origin` seconds of the source."""
 
-    Returns `(start, end, first_word, last_word)`. The pad is at most 0.25 s before the first
-    word and 0.35 s after the last, and never crosses the next word. When a word carries its
-    cue bounds, the pad also stays inside that cue and out of an adjacent cue of another speaker.
-    """
+    samples: np.ndarray
+    origin: float
+
+    @property
+    def end(self) -> float:
+        return self.origin + len(self.samples) / RATE
+
+    def between(self, t0: float, t1: float) -> np.ndarray:
+        lo = max(0, round((t0 - self.origin) * RATE))
+        hi = max(lo, round((t1 - self.origin) * RATE))
+        return self.samples[lo:hi]
+
+
+def pick_words(words: list[tuple[float, float, str]], start: float, end: float) -> tuple[int, int]:
+    """Indexes of the word whose start is nearest `start` and the word whose end is nearest `end`."""
     if not words:
         raise RecapError("the episode has no cue text to snap a clip to")
     first = min(range(len(words)), key=lambda i: abs(words[i][0] - start))
     last = min(range(len(words)), key=lambda i: abs(words[i][1] - end))
-    if last < first:
-        last = first
-    previous_end = words[first - 1][1] if first else words[first][0] - 0.5
-    next_start = words[last + 1][0] if last + 1 < len(words) else words[last][1] + 0.5
-    snapped_start = words[first][0] - min(0.25, max(0.0, (words[first][0] - previous_end) / 2))
-    snapped_end = words[last][1] + min(0.35, max(0.05, (next_start - words[last][1]) / 2))
-    # The pad must stay inside the cues that own the chosen words, and must not cross
-    # into an adjacent cue of another speaker.
-    own_start = _word_field(words[first], 3)
-    own_end = _word_field(words[last], 4)
-    if own_start is not None:
-        snapped_start = max(snapped_start, own_start)
-    if own_end is not None:
-        snapped_end = min(snapped_end, own_end)
-    if first:
-        prev_speaker = _word_field(words[first - 1], 5)
-        this_speaker = _word_field(words[first], 5)
-        prev_cue_end = _word_field(words[first - 1], 4)
-        if prev_speaker is not None and this_speaker is not None and prev_speaker != this_speaker and prev_cue_end is not None:
-            snapped_start = max(snapped_start, prev_cue_end)
-    if last + 1 < len(words):
-        next_speaker = _word_field(words[last + 1], 5)
-        this_speaker = _word_field(words[last], 5)
-        next_cue_start = _word_field(words[last + 1], 3)
-        if next_speaker is not None and this_speaker is not None and next_speaker != this_speaker and next_cue_start is not None:
-            snapped_end = min(snapped_end, next_cue_start)
-    if snapped_end < snapped_start:
-        snapped_end = snapped_start
-    return round(snapped_start, 2), round(snapped_end, 2), first, last
+    return first, max(last, first)
 
 
-def _word_field(word: tuple, index: int):
-    if len(word) <= index:
+def _rms(samples: np.ndarray) -> float:
+    if not len(samples):
+        return 0.0
+    return float(np.sqrt(np.mean(np.square(samples, dtype=np.float64))))
+
+
+def first_quiet(span: Span, level: float, lo: float, hi: float) -> float | None:
+    """Start of the first 20 ms window, stepping 5 ms from `lo` to `hi`, that is 25 dB under `level`."""
+    window = round(QUIET_WINDOW_S * RATE)
+    hop = round(QUIET_HOP_S * RATE)
+    steps = np.arange(int((hi - lo) / QUIET_HOP_S + 1e-9) + 1)
+    begins = round((lo - span.origin) * RATE) + steps * hop
+    inside = (begins >= 0) & (begins + window <= len(span.samples))
+    steps, begins = steps[inside], begins[inside]
+    energy = np.concatenate(([0.0], np.cumsum(np.square(span.samples, dtype=np.float64))))
+    rms = np.sqrt((energy[begins + window] - energy[begins]) / window)
+    quiet = np.flatnonzero(rms < level * 10 ** (QUIET_DB / 20))
+    if not len(quiet):
         return None
-    return word[index]
+    return lo + float(steps[quiet[0]]) * QUIET_HOP_S
+
+
+def clip_edges(words: list[tuple[float, float, str]], first: int, last: int, tail_pad: float,
+               span: Span | None) -> tuple[float, float]:
+    """Clip start and end in seconds for the words `first` through `last`.
+
+    `span` is the source audio around those words. The end never cuts before the last word ends,
+    unless the span's audio ends first. When the next word is closer than the pad, the cut looks
+    for quiet from the last word's end to `BOUNDARY_REACH_S` past the next word's start.
+    """
+    head, tail = words[first], words[last]
+    start = head[0] - LEAD_PAD_S
+    if first:
+        start = max(start, words[first - 1][1])
+    start = max(start, 0.0)
+    padded = tail[1] + tail_pad
+    following = words[last + 1][0] if last + 1 < len(words) else math.inf
+    limit = following - NEXT_WORD_GUARD_S
+    level = 0.0
+    if span is not None:
+        limit = min(limit, span.end)
+        level = _rms(span.between(head[0], tail[1]))
+    if padded <= limit:
+        quiet = first_quiet(span, level, padded, padded + QUIET_SEARCH_S) if level > 0 else None
+        return round(start, 3), round(min(padded if quiet is None else quiet, limit), 3)
+    quiet = None
+    if level > 0:
+        quiet = first_quiet(span, level, tail[1], min(following + BOUNDARY_REACH_S, span.end))
+    end = max(limit, tail[1]) if quiet is None else quiet
+    if span is not None:
+        end = min(end, span.end)
+    return round(start, 3), round(end, 3)
 
 
 FLAGGED_SPEAKERS = ("uncertain", "mixed", "undetermined")
@@ -512,15 +554,31 @@ def loudnorm_to(source: Path, dest: Path) -> float:
     return lufs
 
 
+def read_span(source: Path, t0: float, t1: float) -> Span:
+    """Decode `[t0, t1]` of the source to 16 kHz mono float32."""
+    if shutil.which("ffmpeg") is None:
+        raise RecapError("ffmpeg is not installed or not on PATH")
+    origin = round(t0, 3)
+    proc = subprocess.run([
+        "ffmpeg", "-nostdin", "-loglevel", "error",
+        "-ss", f"{origin:.3f}", "-t", f"{t1 - origin:.3f}", "-i", str(source),
+        "-vn", "-ac", "1", "-ar", str(RATE), "-f", "f32le", "-",
+    ], capture_output=True, check=False)
+    if proc.returncode != 0:
+        detail = proc.stderr.decode(errors="replace").strip() or f"exit code {proc.returncode}"
+        raise RecapError(detail[-2000:])
+    return Span(np.frombuffer(proc.stdout, dtype="<f4"), origin)
+
+
 def cut_clip(source: Path, start: float, end: float, dest: Path) -> None:
-    """Cut `[start, end]` to 24 kHz mono with a short fade in and out."""
+    """Cut `[start, end]` to 24 kHz mono with a 10 ms fade in and a 40 ms fade out."""
     duration = end - start
-    fade_out = max(0.05, min(0.12, duration / 4))
-    fade = f"afade=t=in:d=0.06,afade=t=out:st={max(0.0, duration - fade_out):.2f}:d={fade_out:.2f}"
+    fade_out = min(FADE_OUT_S, duration / 2)
+    fade = f"afade=t=in:d={FADE_IN_S},afade=t=out:st={duration - fade_out:.3f}:d={fade_out:.3f}"
     dest.parent.mkdir(parents=True, exist_ok=True)
     run_ffmpeg([
         "ffmpeg", "-y", "-loglevel", "error",
-        "-ss", f"{start:.2f}", "-to", f"{end:.2f}", "-i", str(source),
+        "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(source),
         "-ac", "1", "-ar", str(SAMPLE_RATE), "-af", fade, str(dest),
     ])
 
@@ -721,7 +779,10 @@ def render_report(episode_id: str, source: Path, dest: Path, duration_s: float, 
         f"- Final loudness: {lufs:.1f} LUFS, true peak {true_peak:.1f} dBTP",
         f"- Flags: {len(flags)}",
         "",
-        "Clip edges are the cue word times the requested range snapped to. "
+        "Clip edges are the cue word times the requested range snapped to. A clip starts 50 ms before its first word "
+        "and never inside the previous word. Its end pads past the last word, cuts where the audio goes quiet, "
+        "and stops 30 ms before the next word. It never cuts before the last word ends. When the next word is "
+        "closer than the pad, the cut looks for quiet within 150 ms of that boundary. "
         "A clip under 4 seconds or over 45 seconds is flagged, as is an uncertain, mixed, or undetermined cue.",
         "",
         "| # | type | speaker | voice | range | length | LUFS in→out | flags |",
@@ -769,7 +830,8 @@ def _public_segment(segment: dict) -> dict:
     return {key: value for key, value in segment.items() if key not in hidden}
 
 
-def build(episode: Episode, rows: list[dict], script_path: Path, out_flag: str | None) -> dict:
+def build(episode: Episode, rows: list[dict], script_path: Path, out_flag: str | None,
+          tail_pad: float = TAIL_PAD_S) -> dict:
     """Cut, narrate, stitch, and write `report.md` next to the audio. Flags do not fail the build."""
     quiet_torch()
     script = load_script(script_path)
@@ -794,7 +856,13 @@ def build(episode: Episode, rows: list[dict], script_path: Path, out_flag: str |
         elif kind == "clip":
             requested_start = parse_ts(segment["start"])
             requested_end = parse_ts(segment["end"])
-            start, end, first, last = snap(words, requested_start, requested_end)
+            first, last = pick_words(words, requested_start, requested_end)
+            span = read_span(
+                source,
+                max(0.0, words[first][0] - LEAD_PAD_S),
+                words[last][1] + tail_pad + QUIET_SEARCH_S + QUIET_WINDOW_S,
+            )
+            start, end = clip_edges(words, first, last, tail_pad, span)
             if end <= start:
                 raise RecapError(f"segment {index}: snapped clip is empty")
             length = round(end - start, 1)
@@ -809,7 +877,7 @@ def build(episode: Episode, rows: list[dict], script_path: Path, out_flag: str |
             stat = source.stat()
             raw = cache / (
                 "clip_"
-                f"{digest('clip', str(source.resolve()), str(stat.st_size), str(stat.st_mtime_ns), f'{start:.2f}', f'{end:.2f}')}"
+                f"{digest('clip', str(source.resolve()), str(stat.st_size), str(stat.st_mtime_ns), f'{start:.3f}', f'{end:.3f}', str(FADE_IN_S), str(FADE_OUT_S))}"
                 ".wav"
             )
             _ensure(raw, lambda target, start=start, end=end: cut_clip(source, start, end, target))

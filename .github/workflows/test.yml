@@ -42,6 +42,8 @@ jobs:
             ~/.cache/podcue
           key: podcue-kokoro-${{ hashFiles('pyproject.toml', 'uv.lock') }}
           restore-keys: podcue-kokoro-
+      - name: Cut clip edges with real ffmpeg
+        run: uv run --python 3.12 pytest tests/test_clip_audio.py -q
       - name: Build a recap with Kokoro narration and a clip
         env:
           PODCUE_LIVE_EN: "1"

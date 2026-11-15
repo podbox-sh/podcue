@@ -33,11 +33,11 @@ Each write is validated when it's made, so there is no fix loop. `podcue check` 
 `fetch` and `build` need the `recap` extra. `start`, `cues`, and `label-groups` are unchanged; installing the extra is enough to run the whole recap, because the extra is a superset of the base package.
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue fetch https://example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue start ./ep/audio.wav
-uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
-uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
-uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.8" podcue fetch https://example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.8" podcue start ./ep/audio.wav
+uvx --python 3.12 --from "podcue[recap]==0.2.8" podcue cues ep_3f9a1c2b7d4e5f60 --limit 200
+uvx --python 3.12 --from "podcue[recap]==0.2.8" podcue label-groups ep_3f9a1c2b7d4e5f60 '[{"groupId":"gc0001","label":"Ada Lovelace"}]'
+uvx --python 3.12 --from "podcue[recap]==0.2.8" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 Pass `--python 3.12`. Kokoro 0.9.4 declares `Requires-Python: <3.13`. A direct media URL downloads without yt-dlp; a page URL needs it, from the same extra. Plain `uvx podcue` does not install the extra, so transcription stays light.
@@ -213,8 +213,8 @@ It fails, listing every problem, when:
 ### `podcue fetch <URL> [--out DIR]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
-uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.8" podcue fetch https://cdn.example.com/ep.mp3 --out ./ep
+uvx --python 3.12 --from "podcue[recap]==0.2.8" podcue fetch https://www.youtube.com/watch?v=VIDEO --out ./ep
 ```
 
 ```json
@@ -226,10 +226,10 @@ uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue fetch https://www.youtube
 - The direct path uses the standard library. The page path imports yt-dlp and exits 1, naming the `recap` extra, when that package is missing.
 - ffmpeg converts the download. An empty or undecodable file exits 1 with `"reason": "not-audio"`.
 
-### `podcue build <episodeId> <script.json> [--out FILE]`
+### `podcue build <episodeId> <script.json> [--out FILE] [--tail-pad-ms MS]`
 
 ```sh
-uvx --python 3.12 --from "podcue[recap]==0.2.7" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
+uvx --python 3.12 --from "podcue[recap]==0.2.8" podcue build ep_3f9a1c2b7d4e5f60 script.json --out recap.mp3
 ```
 
 ```json
@@ -242,7 +242,7 @@ The output is 128 kbps MP3, or 24 kHz mono WAV when the path ends in `.wav`. `--
 
 What it does:
 
-1. Snap each clip to cue word times (below), with a short fade.
+1. Snap each clip to cue word times (below), pad its end to where the audio goes quiet, and fade it in over 10 ms and out over 40 ms.
 2. Narrate each narration segment with Kokoro at 24 kHz on CPU. The default voice is `am_michael`.
 3. Loudnorm each clip to -16 LUFS, true peak -1.5 dBTP. Narration is gained to that same target when Kokoro writes it, then limited so the peak stays at or under -1.5 dBTP. Join the segments with 0.4 s of silence. The mix is loudnormed only when it is already within 3 dB of -16 LUFS; a larger correction would be the late boost that lifts a quiet narration, so that mix is only peak-limited.
 4. Flag a clip under 4 seconds or over 45 seconds, a clip with no overlapping cue, a clip with a second speaker, and a clip that contains a cue whose voice is `uncertain`, `mixed`, or `undetermined`. A second speaker counts when another voice covers at least 1 second and 8% of the clip. The voice is the cue's `speaker`: after `label-groups` that is the group's label, so two groups labeled the same person are one speaker. A cue that still has its group id as `speaker` uses the label from `labels.json` when there is one. An `uncertain`, `mixed`, or `undetermined` cue is flagged even when it is shorter than that 1 second.
@@ -276,7 +276,7 @@ An object, or a bare array of segments. Unknown keys are ignored.
 | `start`, `end` | clip | Seconds (`90.5` or `"90.5"`) or `[h:]mm:ss[.s]` (`"40:43.5"`, `"1:02:03"`). `end` must be after `start`. |
 | `speaker` | clip | Name written into the report. Optional. The default is `?`. |
 
-Cues are at most 12 seconds. `cues.json` has no per-word timestamps. Each cue's words are spread across that cue by character length, and each requested edge snaps to the nearest of those word times, then pads at most 0.25 s before the first word and 0.35 s after the last, stopping at the neighbouring word. The pad is clamped to the cues that own those words, so a clip does not start inside the previous cue or run into the next cue of another speaker. The clip text in the report is those words. A clip that should be one speaker needs consecutive cues whose `speaker` is that person.
+Cues are at most 12 seconds. `cues.json` has no per-word timestamps. Each cue's words are spread across that cue by character length, and each requested edge snaps to the nearest of those word times. The clip starts 50 ms before the first word, and never before the previous word ends. Whisper's word end lands before the sound stops, so the end pads 200 ms past the last word (`--tail-pad-ms` sets it). From there it looks up to 400 ms further for the first 20 ms window 25 dB under the clip's level and cuts at that window. The end stops 30 ms before the next word starts, which also keeps it out of the next cue of another speaker. It never cuts before the last word ends. When the next word is closer than the pad, as it is mid-cue or where two cues touch, the cut looks for quiet from the last word's end to 150 ms past the next word's start. With no quiet there, it ends at the later of the last word's end and 30 ms before the next word. The 4 s and 45 s length flags read this final length. The clip text in the report is those words. A clip that should be one speaker needs consecutive cues whose `speaker` is that person.
 
 ### `podcue fetch-weights`
 
@@ -404,7 +404,7 @@ Bump `version` in `pyproject.toml` and `__version__` in `podcue/__init__.py` to 
 
 Create a GitHub release tagged `v` plus that version, for example `v0.2.1`. Publishing the release runs [publish.yml](.github/workflows/publish.yml). It builds the sdist and wheel, checks that the built version matches the tag with a leading `v` removed, and publishes to PyPI with trusted publishing. The workflow stores no PyPI token. Running the workflow by hand (`workflow_dispatch`) publishes the selected commit the same way, without the tag check.
 
-0.2.7 is the package version on this branch. It is not tagged and not published. See [CHANGELOG.md](CHANGELOG.md). A Whisper slice with no alignment frames is skipped, `slices.json` lets `start` resume, and lock files stay in place so the flock is the only lock. `av` 18.1.0 stays installed next to faster-whisper 1.2.1.
+0.2.8 is the package version on this branch. It is not tagged and not published. See [CHANGELOG.md](CHANGELOG.md). A clip keeps the sound after its last word. The end pads 200 ms (`build --tail-pad-ms`), then cuts where the audio goes quiet, short of the next word.
 
 0.2.6 writes narration as 16-bit WAV, removes lock files when a command finishes, and keeps Kokoro's torch warnings off during `build`.
 
