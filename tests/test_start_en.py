@@ -118,7 +118,7 @@ def test_real_whisper_skips_a_one_frame_slice_and_keeps_going():
         start = cursor * 1000 // 16_000
         cursor += len(piece)
         end = cursor * 1000 // 16_000
-        plan.append(Slice(index, start, end, start, end, 0))
+        plan.append(Slice(index, start, end, 0))
     results = run_slices(samples, plan, transcriber, None, audio_id="live", language="en")
     assert len(results) == len(plan)
     assert results[0][1] == []

@@ -6,7 +6,7 @@ from podcue.regions import Slice
 
 
 def whole(start, end, region=0, index=0):
-    return Slice(index, start, end, start, end, region)
+    return Slice(index, start, end, region)
 
 
 def test_shift_rounds_half_up_to_the_millisecond():
@@ -57,9 +57,9 @@ def test_a_cue_closes_where_a_speaker_region_ends():
     assert [c.text for c in build_cues([first, second])] == ["so anyway", "right"]
 
 
-def test_words_outside_the_keep_window_are_dropped():
-    early = Slice(0, 0, 28_000, 0, 27_000, 0)
-    late = Slice(1, 27_000, 40_000, 27_000, 40_000, 0)
+def test_a_word_belongs_to_the_slice_where_it_starts():
+    early = Slice(0, 0, 27_000, 0)
+    late = Slice(1, 27_000, 40_000, 0)
     words_early = [Word("kept.", 26.0, 26.5), Word("repeated.", 27.2, 27.6)]
     words_late = [Word("repeated.", 0.2, 0.6), Word("end.", 1.0, 1.5)]
     cues = build_cues([(early, words_early), (late, words_late)])

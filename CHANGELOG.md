@@ -11,6 +11,8 @@ Not tagged and not published. The package metadata is `0.2.8`.
 - Clips fade in over 10 ms and out over 40 ms. Clip edges are kept to the millisecond.
 - The under 4 s and over 45 s flags read the padded length.
 - The pad is no longer clamped to the clip's own cue end. A cue ends at Whisper's last-word end, which lands before the sound stops, so that clamp gave every clip ending on a cue no tail at all. The clamp to an adjacent cue of another speaker is gone too. That cue's first word is the next word, so the 30 ms guard keeps the clip out of it.
+- A speech region longer than 28 s is cut at the quietest 100 ms in the last 6 s of each 28 s slice. It was cut on a fixed 28 s grid with a 1 s overlap, and a cut inside a word could give that word twice at the wrong time. On the Gettysburg fixture forced into one region, the grid cut gave "war we we have" and the quiet cut landed in silence with no duplicate.
+- Slices no longer overlap, and a word belongs to the slice where it starts. `slices.json` rows have no `keepStartMs` or `keepEndMs`, so a checkpoint from 0.2.7 is not resumed and its slices run again.
 
 ## 0.2.7
 

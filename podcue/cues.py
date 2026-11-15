@@ -84,7 +84,7 @@ def join_cue_text(tokens: list[str]) -> str:
 
 
 def build_cues(results: list[tuple[Slice, list[Word]]], language: str = "en") -> list[Cue]:
-    """Keep each word that starts inside its slice's keep window, then group words into cues.
+    """Keep each word that starts inside its slice, then group words into cues.
 
     A cue closes on sentence punctuation for `language`, after MAX_CUE_MS, and where one speaker
     region ends.
@@ -110,7 +110,7 @@ def build_cues(results: list[tuple[Slice, list[Word]]], language: str = "en") ->
             end = shift(piece.start_ms, word.end)
             if end <= start:
                 end = start + 1
-            if not piece.keep_start_ms <= start < piece.keep_end_ms:
+            if not piece.start_ms <= start < piece.end_ms:
                 continue
             if bucket and (piece.region != bucket_region or start - bucket[0][0] >= MAX_CUE_MS):
                 close()

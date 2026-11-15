@@ -12,9 +12,9 @@ from podcue.transcribe import transcribe_slice
 
 def _plan():
     return [
-        Slice(0, 0, 1_000, 0, 1_000, 0),
-        Slice(1, 1_000, 2_000, 1_000, 2_000, 0),
-        Slice(2, 2_000, 2_400, 2_000, 2_400, 0),
+        Slice(0, 0, 1_000, 0),
+        Slice(1, 1_000, 2_000, 0),
+        Slice(2, 2_000, 2_400, 0),
     ]
 
 
@@ -90,8 +90,8 @@ def test_speech_without_word_times_skips_the_slice():
 
 def test_run_slices_skips_an_empty_span_and_the_alignment_crash(tmp_path, capsys):
     plan = [
-        Slice(0, 0, 0, 0, 0, 0),
-        Slice(1, 0, 1_000, 0, 1_000, 0),
+        Slice(0, 0, 0, 0),
+        Slice(1, 0, 1_000, 0),
     ]
 
     class Boom:
@@ -169,21 +169,21 @@ def test_redoing_one_slice_keeps_a_later_finished_slice(tmp_path):
     checkpoint = tmp_path / "slices.json"
     audio_id = "ep_aaaaaaaaaaaaaaaa"
     plan = [
-        Slice(0, 0, 900, 0, 900, 0),
-        Slice(1, 1_000, 2_000, 1_000, 2_000, 0),
-        Slice(2, 2_000, 2_500, 2_000, 2_500, 0),
+        Slice(0, 0, 900, 0),
+        Slice(1, 1_000, 2_000, 0),
+        Slice(2, 2_000, 2_500, 0),
     ]
     checkpoint.write_text(json.dumps({
         "version": 1,
         "audioSha256": audio_id,
         "language": "en",
         "slices": [
-            {"index": 0, "startMs": 0, "endMs": 1000, "keepStartMs": 0, "keepEndMs": 1000,
-             "region": 0, "state": "done", "words": [{"text": "zero", "start": 0.1, "end": 0.2}]},
-            {"index": 1, "startMs": 1000, "endMs": 2000, "keepStartMs": 1000, "keepEndMs": 2000,
-             "region": 0, "state": "skipped-empty", "words": []},
-            {"index": 2, "startMs": 2000, "endMs": 2400, "keepStartMs": 2000, "keepEndMs": 2400,
-             "region": 0, "state": "done", "words": [{"text": "two", "start": 0.0, "end": 0.1}]},
+            {"index": 0, "startMs": 0, "endMs": 1000, "region": 0,
+             "state": "done", "words": [{"text": "zero", "start": 0.1, "end": 0.2}]},
+            {"index": 1, "startMs": 1000, "endMs": 2000, "region": 0,
+             "state": "skipped-empty", "words": []},
+            {"index": 2, "startMs": 2000, "endMs": 2400, "region": 0,
+             "state": "done", "words": [{"text": "two", "start": 0.0, "end": 0.1}]},
         ],
     }), encoding="utf-8")
     samples = np.zeros(16_000 * 4, dtype=np.float32)
@@ -231,7 +231,7 @@ def test_a_different_boolean_index_error_is_not_saved_as_empty(tmp_path):
     with pytest.raises(IndexError, match="size of axis is 3"):
         transcribe_slice(outcome_error, np.zeros(1_600, dtype=np.float32))
     checkpoint = tmp_path / "slices.json"
-    plan = [Slice(0, 0, 1_000, 0, 1_000, 0)]
+    plan = [Slice(0, 0, 1_000, 0)]
     first = Boom()
     with pytest.raises(IndexError, match="size of axis is 3"):
         run_slices(np.zeros(16_000, dtype=np.float32), plan, first, checkpoint, audio_id="ep_test", language="en")
@@ -267,9 +267,8 @@ def test_degenerate_slices_run_through_without_aborting(tmp_path):
         start = cursor * 1000 // rate
         cursor += len(piece)
         end = cursor * 1000 // rate
-        plan.append(Slice(index, start, end, start, end, 0))
-    plan.append(Slice(len(plan), (len(samples) - 160) * 1000 // rate, len(samples) * 1000 // rate,
-                      (len(samples) - 160) * 1000 // rate, len(samples) * 1000 // rate, 0))
+        plan.append(Slice(index, start, end, 0))
+    plan.append(Slice(len(plan), (len(samples) - 160) * 1000 // rate, len(samples) * 1000 // rate, 0))
 
     class Touchy:
         def __init__(self):

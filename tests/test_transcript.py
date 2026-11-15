@@ -66,7 +66,7 @@ def test_resolve_language_accepts_any_code_and_rejects_a_disagreement():
 
 
 def test_words_outside_detected_speech_are_left_out():
-    piece = Slice(0, 0, 2_000, 0, 2_000, 0)
+    piece = Slice(0, 0, 2_000, 0)
     results, dropped = assign_words([piece], [(100, 400, "Hello"), (5_000, 5_500, "later")])
     assert dropped == 1
     assert results == [(piece, [Word("Hello", 0.1, 0.4)])]
