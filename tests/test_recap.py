@@ -137,6 +137,39 @@ def test_clip_end_snaps_to_where_the_sound_stops():
     assert silent == 1.7, "with no level to compare, the cut is the padded end"
 
 
+def test_a_roomy_end_that_snaps_past_the_next_word_still_stops_30_ms_short():
+    words = [(1.0, 1.5, " b"), (1.8, 2.2, " c")]
+    samples = np.zeros(4 * RATE, dtype=np.float32)
+    samples[RATE:int(1.9 * RATE)] = 0.5
+    _, end = clip_edges(words, 0, 0, 0.20, Span(samples, 0.0))
+    assert end == 1.77, "quiet at 1.9 s is past the next word, so the 30 ms guard caps the end"
+
+
+def test_a_mid_cue_end_never_cuts_before_the_last_word():
+    words = words_from_cues([{"startMs": 1_000, "endMs": 3_000, "text": "four score and seven"}])
+    word_end = words[1][1]
+    assert words[2][0] == word_end, "the next word starts where the last word ends"
+    _, end = clip_edges(words, 0, 1, 0.20, Span(np.zeros(4 * RATE, dtype=np.float32), 0.0))
+    assert end == word_end, "a silent span leaves the end at the last word's end"
+    samples = np.full(4 * RATE, 0.5, dtype=np.float32)
+    gap = round((word_end + 0.08) * RATE)
+    samples[gap:gap + round(0.1 * RATE)] = 0.0
+    _, end = clip_edges(words, 0, 1, 0.20, Span(samples, 0.0))
+    assert end == pytest.approx(word_end + 0.08, abs=1e-3), "the cut moves to quiet 80 ms past the boundary"
+
+
+def test_an_end_on_touching_cues_keeps_the_whole_first_cue():
+    words = words_from_cues([
+        {"startMs": 1_000, "endMs": 2_000, "text": "four score"},
+        {"startMs": 2_000, "endMs": 3_000, "text": "and seven"},
+    ])
+    loud = Span(np.full(4 * RATE, 0.5, dtype=np.float32), 0.0)
+    _, end = clip_edges(words, 0, 1, 0.20, loud)
+    assert end >= 2.0, f"the cut at {end} drops the end of the first cue"
+    _, bare = clip_edges(words, 0, 1, 0.20, None)
+    assert bare >= 2.0, f"without audio the cut at {bare} drops the end of the first cue"
+
+
 def test_clip_start_leads_the_first_word_and_never_enters_the_previous_one():
     wide = [(0.0, 0.4, " a"), (1.0, 1.5, " b")]
     assert clip_edges(wide, 1, 1, 0.20, None)[0] == 0.95
